@@ -49,7 +49,11 @@ const pageErrors = [];
 
 test.beforeAll(async ({ browser }) => {
   page = await browser.newPage({ acceptDownloads: true });
-  page.on('pageerror', (e) => pageErrors.push(`pageerror: ${e.message}`));
+  page.on('pageerror', (e) => {
+    // With DevTools open (WATCH=1), Chrome injects its web-vitals tracker into the page; its errors are not the app's.
+    if (process.env.WATCH && /reportAllChanges \(<anonymous>/.test(e.stack || '')) return;
+    pageErrors.push(`pageerror: ${e.message} @ ${(e.stack || '').split('\n')[1]?.trim()} (url: ${page.url()})`);
+  });
   page.on('console', (m) => {
     // 4xx responses we trigger on purpose (duplicates, bad uploads) are logged by the browser; anything else is a bug.
     if (m.type() === 'error' && !/Failed to load resource: the server responded with a status of 4\d\d/.test(m.text())) pageErrors.push(`console: ${m.text()}`);
