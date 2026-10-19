@@ -358,6 +358,22 @@ try {
     }
   });
 
+  await check('startup cleanup only removes leftovers the app made, never the owner\'s own files', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contract-desk-sweep-'));
+    fs.mkdirSync(path.join(dir, 'files'));
+    fs.writeFileSync(path.join(dir, 'files', 'my-own-notes.txt'), 'mine');
+    fs.writeFileSync(path.join(dir, 'files', 'Photo 2026.JPG'), 'mine');
+    fs.writeFileSync(path.join(dir, 'files', '3f2b8c1e-9a4d-4e7b-8c21-5d6f7a8b9c0d.pdf'), 'leftover from a failed upload');
+    const s3 = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, DATA_DIR: dir, PORT: '4796', LAN_PASSCODE: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
+    try {
+      await new Promise((resolve) => s3.stdout.on('data', (b) => String(b).includes('running at') && resolve()));
+      assert.deepEqual(fs.readdirSync(path.join(dir, 'files')).sort(), ['Photo 2026.JPG', 'my-own-notes.txt']);
+    } finally {
+      s3.kill();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // Wi-Fi access: a second server with a passcode, reached through this machine's network address like a phone would.
   const lanIp = Object.values(os.networkInterfaces()).flat().find((n) => n.family === 'IPv4' && !n.internal)?.address;
   await check('Wi-Fi access: refuses a short passcode', async () => {

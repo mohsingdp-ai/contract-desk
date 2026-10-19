@@ -74,6 +74,7 @@ async function search(q) {
 test('empty desk invites the first record', async () => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'The desk is empty.' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Change…' })).toHaveCount(0); // data-folder buttons exist only in the desktop app
   await page.getByRole('link', { name: 'New contract' }).click();
   await expect(dialog().getByRole('heading', { name: 'New contract' })).toBeVisible();
 });

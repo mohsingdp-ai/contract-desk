@@ -1,17 +1,22 @@
 // Desktop wrapper: starts the same local server in-process and shows it in an app window.
 // Settings (data folder, phone access, start with computer) live in the OS app-data folder.
-import { app, BrowserWindow, Menu, dialog, shell, clipboard } from 'electron';
+import { app, BrowserWindow, Menu, dialog, shell, clipboard, ipcMain } from 'electron';
+import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const PORT = Number(process.env.CONTRACT_DESK_PORT || 4780);
-const ICON = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'build', 'icon.png');
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ICON = path.join(HERE, '..', 'build', 'icon.png');
+const HIDDEN = !!process.env.CONTRACT_DESK_HIDDEN; // tests: no window
+const TESTING = HIDDEN || !!process.env.CONTRACT_DESK_TEST; // tests: no first-run question, notices, firewall tip or relaunch
 if (process.env.CONTRACT_DESK_USER_DATA) app.setPath('userData', process.env.CONTRACT_DESK_USER_DATA); // tests
 
 // Dialogs attach to the window only while it is visible: on Wayland, attaching to a hidden window crashes.
 const owner = (win) => (win?.isVisible() ? [win] : []);
+const box = (win, opts) => dialog.showMessageBox(...owner(win), opts);
 
 // ---------- settings ----------
 
@@ -31,8 +36,121 @@ function saveSettings(s) {
 const newPasscode = () => [...randomBytes(8)].map((b) => 'abcdefghjkmnpqrstuvwxyz23456789'[b % 31]).join('');
 
 function restart() {
-  app.relaunch(process.env.APPIMAGE ? { execPath: process.env.APPIMAGE } : undefined);
+  if (!TESTING) app.relaunch(process.env.APPIMAGE ? { execPath: process.env.APPIMAGE } : undefined);
   app.exit(0);
+}
+
+// ---------- data folder ----------
+
+const DB_FILE = 'contracts.db';
+const hasDb = (dir) => fs.existsSync(path.join(dir, DB_FILE));
+function recordCounts(dir) {
+  if (!hasDb(dir)) return null;
+  try {
+    const d = new DatabaseSync(path.join(dir, DB_FILE), { readOnly: true });
+    const c = d.prepare('SELECT (SELECT count(*) FROM contracts) AS contracts, (SELECT count(*) FROM nocs) AS nocs, (SELECT count(*) FROM documents) AS documents').get();
+    d.close();
+    return c;
+  } catch {
+    return null;
+  }
+}
+const hasRecords = (dir) => {
+  const c = recordCounts(dir);
+  return !!c && c.contracts + c.nocs + c.documents > 0;
+};
+const describe = (c) => `${c.contracts} contracts, ${c.nocs} NOCs, ${c.documents} documents`;
+function writable(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, `.contract-desk-write-test-${process.pid}`);
+    fs.writeFileSync(probe, '');
+    fs.rmSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Ask for a folder and decide what to do with it. Returns settings changes, or null when nothing changes.
+async function chooseDataFolder(win, s, { firstRun = false } = {}) {
+  const pick = await dialog.showOpenDialog(...owner(win), {
+    title: 'Choose where Contract Desk keeps your records',
+    defaultPath: s.dataDir,
+    buttonLabel: 'Use this folder',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (pick.canceled || !pick.filePaths[0]) return null;
+  const dir = path.resolve(pick.filePaths[0]);
+  if (dir === path.resolve(s.dataDir)) return null;
+  if (!writable(dir)) {
+    await box(win, { type: 'error', message: 'Contract Desk can’t save in that folder', detail: `${dir}\n\nChoose a folder you’re allowed to write to.` });
+    return null;
+  }
+  const current = !firstRun && hasRecords(s.dataDir) ? recordCounts(s.dataDir) : null;
+  if (hasRecords(dir)) {
+    const { response } = await box(win, {
+      type: 'question',
+      message: 'Open the records in this folder?',
+      detail: `${dir}\nalready holds Contract Desk records (${describe(recordCounts(dir))}). Contract Desk will use them from now on.` + (current ? `\n\nYour current records stay where they are, in:\n${s.dataDir}` : '') + '\n\nContract Desk restarts.',
+      buttons: ['Open these records', 'Cancel'],
+      cancelId: 1,
+    });
+    return response === 0 ? { dataDir: dir } : null;
+  }
+  if (current) {
+    const { response } = await box(win, {
+      type: 'question',
+      message: 'Bring your records along?',
+      detail: `Move your records (${describe(current)}) and their files to:\n${dir}\n\nThey are copied and checked before Contract Desk switches. The old folder is left as it is until you delete it.\n\nContract Desk restarts.`,
+      buttons: ['Move my records there', 'Start empty there', 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+    });
+    if (response === 2) return null;
+    return response === 0 ? { dataDir: dir, moveFrom: s.dataDir } : { dataDir: dir };
+  }
+  return { dataDir: dir };
+}
+
+// Runs before the server opens the database: copy, verify, and only then switch. On any problem keep the old folder.
+function finishPendingMove(s) {
+  if (!s.moveFrom) return null;
+  const from = s.moveFrom;
+  const to = s.dataDir;
+  delete s.moveFrom;
+  const destDb = path.join(to, DB_FILE);
+  const copied = [];
+  try {
+    if (hasDb(to)) throw new Error(`${to} already has a Contract Desk database`);
+    fs.mkdirSync(to, { recursive: true });
+    const src = new DatabaseSync(path.join(from, DB_FILE));
+    src.exec(`VACUUM INTO '${destDb.replaceAll("'", "''")}'`); // one consistent copy, including anything still in the WAL
+    copied.push(destDb);
+    const stored = src.prepare('SELECT file_path FROM documents').all();
+    src.close();
+    // Copy only the app's own files: records' attachments and the phone-session key.
+    for (const rel of [...stored.map((r) => r.file_path), 'session.key']) {
+      const a = path.join(from, rel);
+      const b = path.join(to, rel);
+      if (!fs.existsSync(a)) continue;
+      fs.mkdirSync(path.dirname(b), { recursive: true });
+      fs.copyFileSync(a, b, fs.constants.COPYFILE_EXCL);
+      copied.push(b);
+      if (fs.statSync(a).size !== fs.statSync(b).size) throw new Error(`Copy of ${rel} is incomplete`);
+    }
+    const check = new DatabaseSync(destDb, { readOnly: true });
+    const ok = check.prepare('PRAGMA integrity_check').get().integrity_check === 'ok' && check.prepare('SELECT count(*) AS n FROM documents').get().n === stored.length;
+    check.close();
+    if (!ok) throw new Error('The copied database did not match the original');
+    saveSettings(s);
+    return { ok: true, from, to, documents: stored.length };
+  } catch (err) {
+    for (const f of copied) fs.rmSync(f, { force: true });
+    s.dataDir = from;
+    saveSettings(s);
+    return { ok: false, from, to, error: err.message };
+  }
 }
 
 // ---------- start with the computer ----------
@@ -144,21 +262,7 @@ function buildMenu(win, s, lan) {
         label: 'File',
         submenu: [
           { label: 'Open data folder', click: () => shell.openPath(s.dataDir) },
-          {
-            label: 'Change data folder…',
-            click: async () => {
-              const pick = await dialog.showOpenDialog(...owner(win), { title: 'Choose the data folder', defaultPath: s.dataDir, properties: ['openDirectory', 'createDirectory'] });
-              if (pick.canceled || pick.filePaths[0] === s.dataDir) return;
-              const { response } = await dialog.showMessageBox(...owner(win), {
-                type: 'warning',
-                message: 'Use this folder from now on?',
-                detail: `${pick.filePaths[0]}\n\nNothing is moved. Your current records stay in:\n${s.dataDir}\nTo bring them along, close Contract Desk and copy everything from the old folder into the new one first.\n\nContract Desk restarts.`,
-                buttons: ['Use this folder', 'Cancel'],
-                cancelId: 1,
-              });
-              if (response === 0) saveSettings({ ...s, dataDir: pick.filePaths[0] }), restart();
-            },
-          },
+          { label: 'Change data folder…', click: () => changeDataFolder(win, s) },
           { type: 'separator' },
           {
             label: 'Start when the computer starts',
@@ -179,6 +283,11 @@ function buildMenu(win, s, lan) {
   );
 }
 
+async function changeDataFolder(win, s) {
+  const change = await chooseDataFolder(win, s);
+  if (change) saveSettings({ ...s, ...change }), restart();
+}
+
 // ---------- start ----------
 
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -192,7 +301,21 @@ else {
   app.on('window-all-closed', () => app.quit());
 
   app.whenReady().then(async () => {
+    const firstRun = !fs.existsSync(settingsFile());
     const s = loadSettings();
+    if (firstRun && !TESTING) {
+      const { response } = await box(null, {
+        type: 'question',
+        title: 'Contract Desk',
+        message: 'Where should Contract Desk keep your records?',
+        detail: `Your contracts, NOCs and their files are saved in one folder.\n\nSuggested: ${s.dataDir}\n\nYou can change this later from the sidebar or File → Change data folder.`,
+        buttons: ['Use the suggested folder', 'Choose another folder…'],
+        defaultId: 0,
+      });
+      if (response === 1) Object.assign(s, (await chooseDataFolder(null, s, { firstRun: true })) || {});
+    }
+    if (firstRun) saveSettings(s);
+    const moved = finishPendingMove(s);
     if (s.phoneAccess && !s.passcode) {
       s.passcode = newPasscode();
       saveSettings(s);
@@ -220,9 +343,16 @@ else {
       title: 'Contract Desk',
       icon: ICON,
       backgroundColor: '#17160f',
-      show: !process.env.CONTRACT_DESK_HIDDEN, // tests
-      webPreferences: { plugins: true }, // built-in PDF viewer for previews
+      show: !HIDDEN,
+      webPreferences: { plugins: true, preload: path.join(HERE, 'preload.cjs') }, // plugins: built-in PDF viewer for previews
     });
+    const origin = `http://127.0.0.1:${PORT}/`;
+    // The window only ever shows this app; anything else opens in the system browser.
+    win.webContents.on('will-navigate', (e, url) => {
+      if (!url.startsWith(origin)) e.preventDefault(), shell.openExternal(url);
+    });
+    ipcMain.handle('data-folder:open', (e) => e.sender === win.webContents && shell.openPath(s.dataDir));
+    ipcMain.handle('data-folder:choose', (e) => e.sender === win.webContents && changeDataFolder(win, s));
     // "Open in new tab" and other new windows go to the system browser (same local address, no passcode).
     win.webContents.setWindowOpenHandler(({ url }) => {
       if (url.startsWith(`http://127.0.0.1:${PORT}/`)) shell.openExternal(url);
@@ -230,6 +360,10 @@ else {
     });
     buildMenu(win, s, lan);
     await win.loadURL(`http://127.0.0.1:${PORT}/`);
-    if (s.phoneAccess && ufwBlocksPort() && !process.env.CONTRACT_DESK_HIDDEN) showFirewallHelp(win, lan);
+    if (moved && !TESTING)
+      await box(win, moved.ok
+        ? { type: 'info', message: 'Your records have moved', detail: `Now saved in:\n${moved.to}\n\nThe old folder was left as it was:\n${moved.from}\nDelete it once you’ve checked everything is here.` }
+        : { type: 'error', message: 'Your records could not be moved', detail: `${moved.error}\n\nNothing was changed: Contract Desk is still using\n${moved.from}` });
+    if (s.phoneAccess && ufwBlocksPort() && !TESTING) showFirewallHelp(win, lan);
   });
 }

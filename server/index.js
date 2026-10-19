@@ -806,9 +806,12 @@ app.use((err, req, res, next) => {
 });
 
 // Remove stored files with no database row (left by a crash mid-upload or a failed delete).
+// Only names this app generates (random UUID + extension) are ever removed, so a data folder chosen
+// inside e.g. Documents never loses the owner's own files.
+const STORED_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.[a-z0-9]+)?$/;
 function sweepOrphans() {
   const known = new Set(db.prepare('SELECT storage_name FROM documents').all().map((r) => r.storage_name));
-  const orphans = fs.readdirSync(FILES_DIR).filter((n) => !known.has(n));
+  const orphans = fs.readdirSync(FILES_DIR).filter((n) => STORED_NAME.test(n) && !known.has(n));
   removeFiles(orphans);
   if (orphans.length) console.log(`Removed ${orphans.length} orphaned file(s) from ${FILES_DIR}`);
   const missing = db.prepare('SELECT id, file_path FROM documents').all().filter((d) => !fs.existsSync(path.join(DATA_DIR, d.file_path)));

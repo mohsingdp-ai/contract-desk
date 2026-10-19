@@ -12,7 +12,9 @@ Download from the [Releases page](https://github.com/mohsingdp-ai/contract-desk/
 - **Windows:** run the `.exe`. If Windows says "Windows protected your PC", click **More info → Run anyway**.
 - **Linux:** make the `.AppImage` executable (right-click → Properties, or `chmod +x`), then double-click it.
 
-Your records and files are saved in **Documents/Contract Desk**.
+On first launch you choose where your records are kept (suggested: **Documents/Contract Desk**).
+Change it any time with **Change…** under "Data folder" in the sidebar: the app can move your records
+there (copied and checked first; the old folder is kept), or open a folder that already has records.
 
 ## Use it on your phone
 
@@ -29,7 +31,7 @@ Windows asks once to allow it on private networks: click **Allow**. On Linux wit
 - **Document categories** (Bank Payment Documents, Commercial Invoice, …) are yours to change: sidebar → **Document categories**
   to add, rename, reorder or remove them. Removing one moves its documents to another category first.
 - **Deleting** a contract or NOC also deletes its documents and their files. The app always asks first.
-- **Menu → File:** open or change the data folder, start with the computer.
+- **Menu → File:** start with the computer.
 - Not in this version: searching inside files (OCR), backup/restore.
 
 ---

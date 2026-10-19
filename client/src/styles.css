@@ -394,6 +394,23 @@ mark {
   word-break: break-all;
   opacity: 0.85;
 }
+.rail-folder {
+  display: flex;
+  gap: 6px;
+  margin: 2px 0 4px;
+}
+.rail-folder button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid #ffffff33;
+  background: none;
+  color: var(--rail-ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+.rail-folder button:hover {
+  border-color: var(--rail-ink);
+}
 .rail-local {
   display: inline-flex;
   align-items: center;

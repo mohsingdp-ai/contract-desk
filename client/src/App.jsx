@@ -275,6 +275,13 @@ function Rail({ section, facets, meta }) {
       <div className="rail-foot">
         <span className="kicker">Data folder</span>
         <code title={meta.dataDir}>{meta.dataDir}</code>
+        {/* Only inside the desktop app (its preload adds window.desktop); never on phones or in a browser. */}
+        {window.desktop && (
+          <span className="rail-folder">
+            <button onClick={() => window.desktop.openDataFolder()}>Open</button>
+            <button onClick={() => window.desktop.chooseDataFolder()}>Change…</button>
+          </span>
+        )}
         <span className="rail-local">{meta.lan ? 'Wi-Fi access on · passcode' : 'Local only · offline'}</span>
       </div>
     </aside>
