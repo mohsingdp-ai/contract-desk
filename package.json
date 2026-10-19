@@ -16,7 +16,8 @@
     "app": "vite build && electron .",
     "dist": "vite build && electron-builder --linux AppImage --win nsis",
     "dist:linux": "vite build && electron-builder --linux AppImage",
-    "dist:win": "vite build && electron-builder --win nsis"
+    "dist:win": "vite build && electron-builder --win nsis",
+    "demo:video": "node scripts/record-demo.mjs"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
