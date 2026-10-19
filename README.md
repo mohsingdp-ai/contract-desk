@@ -4,11 +4,42 @@ Files trade paperwork against Contracts and NOCs, then finds any document in sec
 Runs on your computer (`127.0.0.1`); optional passcode-protected phone access over Wi-Fi.
 No cloud. Works offline after install.
 
-## Requirements
+## Install (desktop app — recommended)
 
-- Node.js **22.13 or newer** (uses Node's built-in SQLite — nothing native to compile).
+Download from the repo's **Releases** page:
 
-## Install and start
+- **Windows:** `Contract-Desk-…-win-x64.exe` → run it → Next, Next, Install.
+  The installer isn't code-signed yet, so Windows may say "Windows protected your PC":
+  click **More info → Run anyway**.
+- **Linux:** `Contract-Desk-…-linux-x86_64.AppImage` → right-click → Properties → allow
+  executing (or `chmod +x`), then double-click.
+
+It opens in its own window. Your records and files live in **Documents/Contract Desk**
+(File → Open data folder). Menu options:
+
+- **File → Start when the computer starts**
+- **File → Change data folder…**
+- **Phone → Turn phone access on…** — then click **Connect phone** in the sidebar and scan
+  the QR code with the phone's camera. On the phone, use the browser's **Add to Home Screen**
+  to get an app icon.
+  Windows asks once to allow Contract Desk on private networks: click **Allow**.
+  On Linux with a firewall, the app shows the one command to run.
+
+Phones can reach it while the app is open on the computer (minimized is fine) and on the same Wi-Fi.
+If the phone stops connecting after the computer gets a new network address, scan a new QR code
+(or reserve the computer's address in your router).
+
+### Building the installers
+
+- Push a version tag (`git tag v1.0.1 && git push --tags`): GitHub builds the Windows installer
+  and Linux AppImage and publishes them on the Releases page (`.github/workflows/release.yml`).
+- Locally: `npm run dist:linux` → `release/`. The Windows installer needs Wine on Linux, so build it
+  on GitHub (above) or on Windows with `npm run dist:win`.
+- Try the desktop app without packaging: `npm run app`.
+
+## Run from source (developers)
+
+Requires Node.js **22.13 or newer** (uses Node's built-in SQLite — nothing native to compile).
 
 ```bash
 npm install          # once, needs internet

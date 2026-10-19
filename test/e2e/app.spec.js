@@ -518,6 +518,7 @@ test('deleting a NOC removes its documents and files', async () => {
 
 test('keyboard and history: "/" jumps to search, Back returns to the previous page', async () => {
   await page.goto('/#/contracts');
+  await expect(page.getByRole('heading', { level: 1, name: /Contracts/ })).toBeVisible(); // app loaded, shortcut listener attached
   await page.locator('body').click();
   await page.keyboard.press('/');
   await expect(page).toHaveURL(/#\/$/);

@@ -752,11 +752,16 @@ function sweepOrphans() {
 }
 
 sweepOrphans();
-app.listen(PORT, HOST, () => {
-  console.log(`Contract Desk running at http://127.0.0.1:${PORT}`);
-  console.log(`Data folder: ${DATA_DIR}`);
-  if (LAN_PASSCODE) {
-    for (const ip of lanAddresses()) console.log(`Wi-Fi access ON (passcode required): http://${ip}:${PORT}`);
-    console.log('To connect a phone without typing the passcode: open the app here and use "Connect phone".');
-  }
+// Resolves once listening; the desktop app awaits this, and a busy port rejects it (e.g. EADDRINUSE).
+export const ready = new Promise((resolve, reject) => {
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`Contract Desk running at http://127.0.0.1:${PORT}`);
+    console.log(`Data folder: ${DATA_DIR}`);
+    if (LAN_PASSCODE) {
+      for (const ip of lanAddresses()) console.log(`Wi-Fi access ON (passcode required): http://${ip}:${PORT}`);
+      console.log('To connect a phone without typing the passcode: open the app here and use "Connect phone".');
+    }
+    resolve({ port: PORT, lanAddresses: LAN_PASSCODE ? lanAddresses() : [] });
+  });
+  server.on('error', reject);
 });

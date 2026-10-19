@@ -12,7 +12,11 @@
     "start": "node --env-file-if-exists=.env server/index.js",
     "dev": "node --env-file-if-exists=.env --watch server/index.js & vite",
     "test": "node test/acceptance.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "app": "vite build && electron .",
+    "dist": "vite build && electron-builder --linux AppImage --win nsis",
+    "dist:linux": "vite build && electron-builder --linux AppImage",
+    "dist:win": "vite build && electron-builder --win nsis"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
@@ -25,8 +29,49 @@
     "@fontsource/red-hat-mono": "^5.2.0",
     "@playwright/test": "^1.64.1",
     "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "vite": "^7.1.0"
-  }
+  },
+  "main": "electron/main.js",
+  "build": {
+    "appId": "com.contractdesk.app",
+    "productName": "Contract Desk",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**",
+      "server/**",
+      "dist/**",
+      "build/icon.png",
+      "package.json"
+    ],
+    "artifactName": "Contract-Desk-${version}-${os}-${arch}.${ext}",
+    "linux": {
+      "target": "AppImage",
+      "category": "Office",
+      "icon": "build/icon.png",
+      "synopsis": "Local contract & document manager",
+      "syncDesktopName": true
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Contract Desk"
+    }
+  },
+  "author": "Contract Desk",
+  "desktopName": "contract-desk.desktop"
 }

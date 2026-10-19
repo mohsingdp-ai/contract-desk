@@ -1,0 +1,57 @@
+# Builds the desktop installers on real Windows and Linux machines.
+# - Push a tag like v1.0.0  -> builds both and publishes them on the repo's Releases page.
+# - "Run workflow" button   -> builds both and keeps them as downloadable run artifacts.
+name: Build installers
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: --win nsis -c.win.signAndEditExecutable=true # real Windows can embed the icon in the .exe
+            files: release/*.exe
+          - os: ubuntu-latest
+            target: --linux AppImage
+            files: release/*.AppImage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx electron-builder ${{ matrix.target }} --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" installers/* \
+            --repo "${{ github.repository }}" \
+            --title "Contract Desk ${{ github.ref_name }}" \
+            --notes "Windows: download the .exe and run it. Linux: download the .AppImage, make it executable, and double-click it."
