@@ -14,6 +14,11 @@ const ICONS = {
   arrow: 'M5 12h14m0 0-6-6m6 6-6 6',
   sheet: 'M4 4h16v16H4zM4 10h16M4 15h16M10 4v16',
   qr: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2M14 18h2v2M18 18h2v2h-2z',
+  back: 'M19 12H5m0 0 6-6m-6 6 6 6',
+  sun: 'M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
+  moon: 'M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5Z',
+  check: 'M5 12.5l4.5 4.5L19 7.5',
+  chevron: 'M6 9l6 6 6-6',
 };
 
 export function Icon({ name, size = 16 }) {
@@ -43,7 +48,7 @@ export function Hl({ text, q }) {
   return out;
 }
 
-export function Modal({ title, kicker, onClose, children, wide, tone }) {
+export function Modal({ title, onClose, children, wide, tone }) {
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -54,10 +59,7 @@ export function Modal({ title, kicker, onClose, children, wide, tone }) {
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={`modal ${wide ? 'modal-wide' : ''} ${tone === 'danger' ? 'modal-danger' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         <header className="modal-head">
-          <div>
-            {kicker && <div className="kicker">{kicker}</div>}
-            <h2>{title}</h2>
-          </div>
+          <h2>{title}</h2>
           <button className="btn-icon" onClick={onClose} aria-label="Close">
             <Icon name="x" size={18} />
           </button>
@@ -84,7 +86,7 @@ export function Confirm({ title, children, confirmLabel = 'Delete', onConfirm, o
     }
   };
   return (
-    <Modal title={title} kicker="Confirm permanent deletion" onClose={onClose} tone="danger">
+    <Modal title={title} onClose={onClose} tone="danger">
       <div className="modal-body confirm-body">{children}</div>
       {error && <p className="form-error">{error}</p>}
       <footer className="modal-foot">
@@ -129,7 +131,7 @@ export function TagInput({ value, onChange, suggestions = [], id }) {
         <span className="tag" key={tagKey(t)}>
           {t}
           <button type="button" onClick={() => onChange(value.filter((x) => x !== t))} aria-label={`Remove tag ${t}`}>
-            ×
+            <Icon name="x" size={12} />
           </button>
         </span>
       ))}
@@ -170,13 +172,13 @@ export function Pager({ data, onPage }) {
   return (
     <nav className="pager" aria-label="Pages">
       <button className="btn btn-sm" disabled={data.page <= 1} onClick={() => onPage(data.page - 1)}>
-        ← Prev
+        <Icon name="back" size={14} /> Prev
       </button>
       <span className="mono">
         {from}–{Math.min(data.total, from + data.pageSize - 1)} of {data.total}
       </span>
       <button className="btn btn-sm" disabled={data.page >= data.pages} onClick={() => onPage(data.page + 1)}>
-        Next →
+        Next <Icon name="arrow" size={14} />
       </button>
     </nav>
   );
@@ -194,9 +196,9 @@ export function ParentLink({ parent, onOpen }) {
   );
 }
 
-export function DocRow({ doc, q, showParent, onOpenDoc, onOpenParent, onDelete, i = 0 }) {
+export function DocRow({ doc, q, showParent, onOpenDoc, onOpenParent, onDelete }) {
   return (
-    <li className="doc-row" style={{ '--i': i }}>
+    <li className="doc-row">
       <TypeGlyph type={doc.file_type} />
       <div className="doc-main">
         <button className="doc-name" onClick={onOpenDoc}>
@@ -287,7 +289,7 @@ export function UploadDialog({ parent, categories, initialCategory, tagSuggestio
   };
 
   return (
-    <Modal title={`Add documents to ${parent.no}`} kicker={isContract ? 'Contract upload' : 'NOC upload'} onClose={onClose} wide>
+    <Modal title={`Add documents to ${parent.no}`} onClose={onClose} wide>
       <div className="modal-body">
         <div
           className={`dropzone ${drag ? 'is-drag' : ''}`}
@@ -334,7 +336,6 @@ export function UploadDialog({ parent, categories, initialCategory, tagSuggestio
               {rows.map((r, i) => (
                 <li key={r.key} className="stage-row">
                   <div className="stage-file">
-                    <span className="mono stage-n">{String(i + 1).padStart(2, '0')}</span>
                     <span className="mono dim stage-orig" title={r.file.name}>
                       {r.file.name}
                     </span>
@@ -357,8 +358,8 @@ export function UploadDialog({ parent, categories, initialCategory, tagSuggestio
                         </select>
                       </Field>
                     )}
-                    <Field label="Reference No." hint="Optional, e.g. invoice no.">
-                      <input className="mono" value={r.reference_no} onChange={(e) => patch(r.key, { reference_no: e.target.value })} placeholder="INV-…" />
+                    <Field label="Reference No.">
+                      <input className="mono" value={r.reference_no} onChange={(e) => patch(r.key, { reference_no: e.target.value })} placeholder="Optional, e.g. INV-…" />
                     </Field>
                     <Field label="Tags" group>
                       <TagInput id={r.key} value={r.tags} onChange={(tags) => patch(r.key, { tags })} suggestions={tagSuggestions} />
@@ -448,12 +449,12 @@ export function DocDrawer({ id, meta, tagSuggestions, onClose, onChanged, onOpen
             <div className="preview">
               {doc.file_type === 'pdf' &&
                 (inlinePdf ? (
-                  <iframe title={doc.display_name} src={fileUrl(doc.id)} />
+                  <iframe title={doc.display_name} src={`${fileUrl(doc.id, false, doc.display_name)}#navpanes=0&view=FitH`} />
                 ) : (
                   <div className="preview-excel preview-pdf">
                     <Icon name="open" size={36} />
                     <p>Phones can't show PDFs inside a page.</p>
-                    <a className="btn btn-primary" href={fileUrl(doc.id)} target="_blank" rel="noreferrer">
+                    <a className="btn btn-primary" href={fileUrl(doc.id, false, doc.display_name)} target="_blank" rel="noreferrer">
                       <Icon name="open" /> Open PDF
                     </a>
                   </div>
@@ -474,7 +475,7 @@ export function DocDrawer({ id, meta, tagSuggestions, onClose, onChanged, onOpen
                 <Icon name="download" /> Download
               </a>
               {(doc.file_type === 'image' || (doc.file_type === 'pdf' && inlinePdf)) && (
-                <a className="btn" href={fileUrl(doc.id)} target="_blank" rel="noreferrer">
+                <a className="btn" href={fileUrl(doc.id, false, doc.display_name)} target="_blank" rel="noreferrer">
                   <Icon name="open" /> Open in new tab
                 </a>
               )}
@@ -506,7 +507,13 @@ export function DocDrawer({ id, meta, tagSuggestions, onClose, onChanged, onOpen
               </Field>
               {error && <p className="form-error">{error}</p>}
               <button className="btn btn-primary" type="submit">
-                {saved ? 'Saved ✓' : 'Save changes'}
+                {saved ? (
+                  <>
+                    <Icon name="check" /> Saved
+                  </>
+                ) : (
+                  'Save changes'
+                )}
               </button>
             </form>
 

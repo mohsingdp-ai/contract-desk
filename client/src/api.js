@@ -43,4 +43,6 @@ export const fmtAmount = (n) => Number(n).toLocaleString(undefined, { minimumFra
 export const fmtDate = (s) => new Date(s).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
 export const fmtSize = (b) => (b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1048576).toFixed(1)} MB`);
 export const tagKey = (s) => s.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
-export const fileUrl = (id, download) => `/api/documents/${id}/file${download ? '?download=1' : ''}`;
+// The optional trailing name is cosmetic: browsers' PDF viewers and new tabs show it as the title.
+export const fileUrl = (id, download, name) =>
+  `/api/documents/${id}/file${name ? `/${encodeURIComponent(name)}` : ''}${download ? '?download=1' : ''}`;

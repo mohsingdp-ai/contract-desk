@@ -199,7 +199,7 @@ test('PDF and image preview load only when opened; Excel offers a download', asy
   await page.getByRole('row').filter({ hasText: 'CT-2026-014' }).click();
   await expect(page.locator('iframe, .preview img')).toHaveCount(0);
 
-  const pdfResponse = page.waitForResponse((r) => /\/api\/documents\/\d+\/file$/.test(r.url()));
+  const pdfResponse = page.waitForResponse((r) => /\/api\/documents\/\d+\/file\/Commercial%20invoice$/.test(r.url())); // name in the path titles the PDF viewer
   await docRow('Commercial invoice').getByRole('button', { name: 'Open' }).click();
   const r = await pdfResponse;
   expect(r.status()).toBe(200);
@@ -239,7 +239,7 @@ test('rename and re-tag in the drawer; file access, parent and Reference No. sur
   await tagInput(drawer).fill('Paid');
   await tagInput(drawer).press('Enter');
   await drawer.getByRole('button', { name: 'Save changes' }).click();
-  await expect(drawer.getByRole('button', { name: 'Saved ✓' })).toBeVisible();
+  await expect(drawer.getByRole('button', { name: 'Saved' })).toBeVisible();
   await expect(drawer.getByRole('heading', { name: 'Final invoice (signed)' })).toBeVisible();
   await expect(drawer.getByLabel('Reference No.')).toHaveValue('INV-2026-001');
 
@@ -413,10 +413,10 @@ test('pagination pages through long lists', async ({ request }) => {
   await page.goto('/#/contracts?q=BULK');
   await expect(page.locator('.table a.tr')).toHaveCount(25);
   await expect(page.locator('.pager')).toContainText('1–25 of 30');
-  await page.getByRole('button', { name: 'Next →' }).click();
+  await page.getByRole('button', { name: 'Next' }).click();
   await expect(page.locator('.table a.tr')).toHaveCount(5);
   await expect(page.locator('.pager')).toContainText('26–30 of 30');
-  await page.getByRole('button', { name: '← Prev' }).click();
+  await page.getByRole('button', { name: 'Prev' }).click();
   await expect(page.locator('.table a.tr')).toHaveCount(25);
 });
 
@@ -536,6 +536,25 @@ test('phone width: no sideways scrolling on main pages', async () => {
     expect(overflow, `horizontal overflow on ${url}`).toBeLessThanOrEqual(0);
   }
   await page.setViewportSize({ width: 1280, height: 800 });
+});
+
+test('theme switch flips light/dark, is remembered after reload, and flips back', async () => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('/#/');
+  const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const light = await bg();
+  await page.getByRole('button', { name: 'Switch to dark theme' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  expect(await bg()).not.toBe(light);
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark'); // applied before the app starts
+  await page.getByRole('button', { name: 'Switch to light theme' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  expect(await bg()).toBe(light);
+  // A dark system still shows light when light was chosen.
+  await page.emulateMedia({ colorScheme: 'dark' });
+  expect(await bg()).toBe(light);
+  await page.emulateMedia({ colorScheme: null });
 });
 
 test('no unexpected browser errors during the whole run', async () => {

@@ -139,10 +139,7 @@ function PasscodeScreen() {
     <div className="passcode">
       <form className="modal" onSubmit={submit}>
         <header className="modal-head">
-          <div>
-            <div className="kicker">Contract Desk</div>
-            <h2>Enter passcode</h2>
-          </div>
+          <h2>Enter passcode</h2>
         </header>
         <div className="modal-body">
           <Field label="Passcode" hint="Asked once per device. Set in the app's .env file on your computer.">
@@ -179,11 +176,11 @@ function ConnectPhone() {
   const left = pair ? Math.max(0, Math.round((pair.expiresAt - now) / 1000)) : 0;
   return (
     <>
-      <button className="rail-connect" onClick={() => setOpen(true)}>
-        <Icon name="qr" /> Connect phone
+      <button className="rail-connect" onClick={() => setOpen(true)} aria-label="Connect phone">
+        <Icon name="qr" /> <span className="rail-connect-label">Connect phone</span>
       </button>
       {open && (
-        <Modal title="Connect a phone" kicker="Scan with the phone's camera" onClose={() => (setOpen(false), setPair(null))}>
+        <Modal title="Connect a phone" onClose={() => (setOpen(false), setPair(null))}>
           <div className="modal-body pair">
             {error && <p className="form-error">{error}</p>}
             {pair && !pair.links.length && <p className="form-error">This computer has no Wi-Fi network address right now.</p>}
@@ -220,13 +217,33 @@ function ConnectPhone() {
   );
 }
 
+// Light/dark switch. Starts from the system setting; the choice is remembered on this device only.
+function ThemeSwitch() {
+  const systemDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || (systemDark() ? 'dark' : 'light'));
+  const next = theme === 'dark' ? 'light' : 'dark';
+  const flip = () => {
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem('theme', next);
+    } catch {}
+    setTheme(next);
+  };
+  return (
+    <button className="rail-theme" onClick={flip} aria-label={`Switch to ${next} theme`} title={`Switch to ${next} theme`}>
+      <Icon name={next === 'dark' ? 'moon' : 'sun'} />
+      <span className="rail-theme-label">{next === 'dark' ? 'Dark theme' : 'Light theme'}</span>
+    </button>
+  );
+}
+
 function Rail({ section, facets, meta }) {
   const n = (v) => v.toLocaleString();
   return (
     <aside className="rail">
-      <a className="brand" href="#/">
+      <a className="brand" href="#/" aria-label="Contract Desk home">
         <span className="brand-mark" aria-hidden="true" />
-        <span>
+        <span className="brand-word">
           Contract
           <br />
           Desk
@@ -247,14 +264,14 @@ function Rail({ section, facets, meta }) {
         </a>
       </nav>
       {meta.lan && meta.onThisComputer && <ConnectPhone />}
-      <div className="rail-stat">
-        <span className="kicker">Documents filed</span>
-        <span className="rail-big">{n(facets.counts.documents)}</span>
-      </div>
+      <ThemeSwitch />
+      <p className="rail-stat">
+        <span className="mono">{n(facets.counts.documents)}</span> documents filed
+      </p>
       <div className="rail-foot">
         <span className="kicker">Data folder</span>
         <code title={meta.dataDir}>{meta.dataDir}</code>
-        <span className="rail-local">{meta.lan ? '● Wi-Fi access on · passcode' : '● Local only · offline'}</span>
+        <span className="rail-local">{meta.lan ? 'Wi-Fi access on · passcode' : 'Local only · offline'}</span>
       </div>
     </aside>
   );
@@ -289,6 +306,7 @@ function FilterBar({ params, set, facets, meta, show }) {
       <summary className="filters-toggle">
         Filters
         {active.length > 0 && <span className="section-count">{active.length}</span>}
+        <Icon name="chevron" size={14} />
       </summary>
       <div className="filters">
         {sel('project', 'Project', facets.projects)}
@@ -352,11 +370,10 @@ function ExportLink({ scope, filters, label = 'Export to Excel' }) {
   );
 }
 
-function PageHead({ kicker, title, count, children }) {
+function PageHead({ title, count, children }) {
   return (
     <header className="page-head">
       <div>
-        <div className="kicker">{kicker}</div>
         <h1 className="display">
           {title}
           {count != null && <span className="display-count">{count.toLocaleString()}</span>}
@@ -378,8 +395,8 @@ function ContractTable({ items, q }) {
         <span className="num">Docs</span>
         <span>Updated</span>
       </div>
-      {items.map((c, i) => (
-        <a className="tr" role="row" key={c.id} href={`#/contracts/${c.id}`} style={{ '--i': i }}>
+      {items.map((c) => (
+        <a className="tr" role="row" key={c.id} href={`#/contracts/${c.id}`}>
           <span className="id-cell">
             <span className="ident">
               <Hl text={c.contract_no} q={q} />
@@ -412,8 +429,8 @@ function NocTable({ items, q }) {
         <span className="num">Docs</span>
         <span>Updated</span>
       </div>
-      {items.map((n, i) => (
-        <a className="tr" role="row" key={n.id} href={`#/nocs/${n.id}`} style={{ '--i': i }}>
+      {items.map((n) => (
+        <a className="tr" role="row" key={n.id} href={`#/nocs/${n.id}`}>
           <span className="id-cell">
             <span className="ident">
               <Hl text={n.indent_no} q={q} />
@@ -456,12 +473,13 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
     {
       key: 'documents',
       title: 'Documents',
+      noun: 'documents',
       data: docs.data,
       page: 'dp',
       body: (d) => (
         <ul className="doc-list">
-          {d.items.map((doc, i) => (
-            <DocRow key={doc.id} doc={doc} q={q} i={i} showParent onOpenDoc={() => openDoc(doc.id)} onOpenParent={() => openParent(doc.parent)} />
+          {d.items.map((doc) => (
+            <DocRow key={doc.id} doc={doc} q={q} showParent onOpenDoc={() => openDoc(doc.id)} onOpenParent={() => openParent(doc.parent)} />
           ))}
         </ul>
       ),
@@ -469,6 +487,7 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
     {
       key: 'contracts',
       title: 'Contracts',
+      noun: 'contracts',
       data: contracts.data,
       page: 'cp',
       body: (d) => <ContractTable items={d.items} q={q} />,
@@ -476,23 +495,25 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
     {
       key: 'nocs',
       title: 'NOCs',
+      noun: 'NOCs',
       data: nocs.data,
       page: 'np',
       body: (d) => <NocTable items={d.items} q={q} />,
       hint: contractOnly ? 'NOCs have no project, firm or amount, so those filters hide them.' : null,
     },
   ];
-  // Sections holding an exact identifier match float to the top.
-  const exact = (s) => (q && s.data?.items.some((x) => x.rank === 0) ? 0 : 1);
-  sections.sort((a, b) => exact(a) - exact(b));
+  // Sections holding an exact identifier match float to the top; empty sections sink to the bottom.
+  const rankOf = (s) => (q && s.data?.items.some((x) => x.rank === 0) ? 0 : s.data && !s.data.total ? 2 : 1);
+  sections.sort((a, b) => rankOf(a) - rankOf(b));
+  const nothingFound = searching && sections.every((s) => s.data && !s.data.total);
 
   const nothingFiled = !facets.counts.contracts && !facets.counts.nocs;
 
   return (
     <div className="page page-search">
       <div className="search-hero">
-        <label className="kicker" htmlFor="q">
-          Find anything filed
+        <label className="sr-only" htmlFor="q">
+          Search everything filed
         </label>
         <div className="search-box">
           <Icon name="search" size={26} />
@@ -513,7 +534,7 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
         </div>
         <FilterBar params={params} set={set} facets={facets} meta={meta} show={['project', 'firm', 'category', 'file_type', 'tag', 'currency', 'min']} />
         <div className="search-foot">
-          <span className="dim">Searches identifiers, names, filenames, Reference No. and tags. Exact identifier matches come first.</span>
+          <span className="dim search-help">Searches identifiers, names, filenames, Reference No. and tags. Exact identifier matches come first.</span>
           <ExportLink scope="all" filters={filters} />
         </div>
       </div>
@@ -534,8 +555,19 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
       ) : (
         <div className="results">
           {(contracts.error || docs.error || nocs.error) && <p className="form-error">{contracts.error || docs.error || nocs.error}</p>}
-          {sections.map((s) => (
-            <section className="result-section" key={s.key}>
+          {nothingFound && (
+            <Empty>
+              <h2>
+                Nothing matches{q && <span className="empty-query"> “{q}”</span>}
+              </h2>
+              <p>Search looks at Contract No., Indent No., names, filenames, Reference No. and tags. Check the spelling or clear a filter.</p>
+              <button className="btn" onClick={() => set(Object.fromEntries(FILTER_KEYS.map((k) => [k, ''])))}>
+                Clear search and filters
+              </button>
+            </Empty>
+          )}
+          {!nothingFound && sections.map((s) => (
+            <section className={`result-section ${s.data && !s.data.total ? 'is-empty' : ''}`} key={s.key}>
               <header className="section-head">
                 <h2 className="section-label">
                   {searching ? s.title : `Recent ${s.title}`}
@@ -550,7 +582,7 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
                   <Pager data={s.data} onPage={(p) => go('/', { ...params, [s.page]: p }, { replace: true })} />
                 </>
               ) : (
-                <p className="none">{s.hint || (searching ? `No ${s.title} match.` : `No ${s.title} yet.`)}</p>
+                <p className="none">{s.hint || (searching ? `No ${s.noun} match.` : `No ${s.noun} yet.`)}</p>
               )}
             </section>
           ))}
@@ -592,7 +624,7 @@ function ContractForm({ initial, facets, onSaved, onClose }) {
     }
   };
   return (
-    <Modal title={initial ? `Edit ${initial.contract_no}` : 'New contract'} kicker="Contract record" onClose={onClose}>
+    <Modal title={initial ? `Edit ${initial.contract_no}` : 'New contract'} onClose={onClose}>
       <form onSubmit={submit}>
         <div className="modal-body form-grid">
           <Field label="Contract No." span={2} hint="Must be unique.">
@@ -654,7 +686,7 @@ function ContractsPage({ route, go, meta, facets, version, bump }) {
   const { data, error } = useData(`/api/contracts${qs({ ...filters, page: params.page })}`, version, 120);
   return (
     <div className="page">
-      <PageHead kicker="Register" title="Contracts" count={data?.total}>
+      <PageHead title="Contracts" count={data?.total}>
         <ExportLink scope="contracts" filters={filters} />
         <button className="btn btn-primary" onClick={() => go('/contracts', { ...params, new: 1 })}>
           <Icon name="plus" /> New contract
@@ -740,11 +772,10 @@ function DeleteRecordConfirm({ kind, no, docs, onConfirm, onClose }) {
   );
 }
 
-function DocGroup({ n, title, docs, onAdd, onOpenDoc, onDelete }) {
+function DocGroup({ title, docs, onAdd, onOpenDoc, onDelete }) {
   return (
     <section className={`doc-group ${docs.length ? '' : 'is-empty'}`}>
       <header className="doc-group-head">
-        {n && <span className="mono group-n">{n}</span>}
         <h3>{title}</h3>
         <span className="mono dim">{docs.length}</span>
         <span className="spacer" />
@@ -754,8 +785,8 @@ function DocGroup({ n, title, docs, onAdd, onOpenDoc, onDelete }) {
       </header>
       {docs.length > 0 && (
         <ul className="doc-list">
-          {docs.map((d, i) => (
-            <DocRow key={d.id} doc={d} i={i} onOpenDoc={() => onOpenDoc(d.id)} onDelete={() => onDelete(d)} />
+          {docs.map((d) => (
+            <DocRow key={d.id} doc={d} onOpenDoc={() => onOpenDoc(d.id)} onDelete={() => onDelete(d)} />
           ))}
         </ul>
       )}
@@ -776,7 +807,7 @@ function ContractDetail({ id, go, meta, facets, version, bump, openDoc, tagNames
       <div className="page">
         <Empty>
           <h2>{error}</h2>
-          <a href="#/contracts">← All contracts</a>
+          <a href="#/contracts">All contracts</a>
         </Empty>
       </div>
     );
@@ -790,11 +821,10 @@ function ContractDetail({ id, go, meta, facets, version, bump, openDoc, tagNames
   return (
     <div className="page">
       <a className="back" href="#/contracts">
-        ← Contracts
+        <Icon name="back" size={14} /> Contracts
       </a>
       <header className="record-head">
         <div>
-          <div className="kicker">Contract No.</div>
           <h1 className="ident-xl">{c.contract_no}</h1>
         </div>
         <div className="page-actions">
@@ -839,10 +869,9 @@ function ContractDetail({ id, go, meta, facets, version, bump, openDoc, tagNames
       </dl>
 
       <div className="groups">
-        {meta.categories.map((cat, i) => (
+        {meta.categories.map((cat) => (
           <DocGroup
             key={cat}
-            n={String(i + 1).padStart(2, '0')}
             title={cat}
             docs={c.documents.filter((d) => d.category === cat)}
             onAdd={() => setModal({ upload: cat })}
@@ -899,7 +928,7 @@ function NocForm({ initial, onSaved, onClose }) {
     }
   };
   return (
-    <Modal title={initial ? `Edit ${initial.indent_no}` : 'New NOC'} kicker="No-objection certificate" onClose={onClose}>
+    <Modal title={initial ? `Edit ${initial.indent_no}` : 'New NOC'} onClose={onClose}>
       <form onSubmit={submit}>
         <div className="modal-body form-grid">
           <Field label="Indent No." span={2} hint="Unique, e.g. Ind-1">
@@ -935,7 +964,7 @@ function NocsPage({ route, go, meta, facets, version, bump }) {
   const { data, error } = useData(`/api/nocs${qs({ ...filters, page: params.page })}`, version, 120);
   return (
     <div className="page">
-      <PageHead kicker="Register" title="NOCs" count={data?.total}>
+      <PageHead title="NOCs" count={data?.total}>
         <ExportLink scope="nocs" filters={filters} />
         <button className="btn btn-primary" onClick={() => go('/nocs', { ...params, new: 1 })}>
           <Icon name="plus" /> New NOC
@@ -987,7 +1016,7 @@ function NocDetail({ id, go, version, bump, openDoc, tagNames, meta }) {
       <div className="page">
         <Empty>
           <h2>{error}</h2>
-          <a href="#/nocs">← All NOCs</a>
+          <a href="#/nocs">All NOCs</a>
         </Empty>
       </div>
     );
@@ -1001,11 +1030,10 @@ function NocDetail({ id, go, version, bump, openDoc, tagNames, meta }) {
   return (
     <div className="page">
       <a className="back" href="#/nocs">
-        ← NOCs
+        <Icon name="back" size={14} /> NOCs
       </a>
       <header className="record-head">
         <div>
-          <div className="kicker">Indent No.</div>
           <h1 className="ident-xl">{n.indent_no}</h1>
         </div>
         <div className="page-actions">

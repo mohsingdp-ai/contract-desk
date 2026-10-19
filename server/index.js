@@ -611,7 +611,7 @@ app.delete('/api/documents/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/documents/:id/file', (req, res, next) => {
+app.get('/api/documents/:id/file{/:name}', (req, res, next) => {
   const doc = getDoc(req.params.id);
   const abs = path.join(DATA_DIR, doc.file_path);
   if (!fs.existsSync(abs)) throw new HttpError(404, 'The stored file is missing from the data folder');
