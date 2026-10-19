@@ -14,10 +14,11 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false # one OS failing should not cancel the other
       matrix:
         include:
           - os: windows-latest
-            target: --win nsis -c.win.signAndEditExecutable=true # real Windows can embed the icon in the .exe
+            target: --win nsis
             files: release/*.exe
           - os: ubuntu-latest
             target: --linux AppImage
