@@ -6,6 +6,7 @@ import path from 'node:path';
 import { randomUUID, randomBytes, createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import QRCode from 'qrcode';
 import { openDb, tx, tagKey, CATEGORIES } from './db.js';
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || 'data');
@@ -361,6 +362,13 @@ const SESSION = LAN_PASSCODE
     })()
   : '';
 const failedLogins = new Map(); // ip -> { count, until }
+const giveSession = (res) => res.cookie('cd_session', SESSION, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 864e5, path: '/' });
+
+// Addresses a phone on the same network can reach (skips virtual adapters like Docker and VMs).
+const lanAddresses = () =>
+  Object.entries(os.networkInterfaces())
+    .filter(([name]) => !/^(docker|br-|veth|virbr|vmnet|vboxnet)/.test(name))
+    .flatMap(([, nets]) => nets.filter((n) => n.family === 'IPv4' && !n.internal).map((n) => n.address));
 
 app.post('/api/login', (req, res) => {
   if (!LAN_PASSCODE) throw new HttpError(404, 'Not found');
@@ -373,8 +381,37 @@ app.post('/api/login', (req, res) => {
     throw new HttpError(401, 'Wrong passcode');
   }
   failedLogins.delete(ip);
-  res.cookie('cd_session', SESSION, { httpOnly: true, sameSite: 'strict', maxAge: 30 * 864e5, path: '/' });
+  giveSession(res);
   res.json({ ok: true });
+});
+
+// Scan-to-connect: the computer shows a QR code holding a one-time link that unlocks the scanning phone.
+// Codes work once and expire after 10 minutes, so a photo of an old code is useless.
+const PAIR_TTL = 10 * 60_000;
+const pairCodes = new Map(); // code -> expiry time
+
+app.post('/api/pair', async (req, res) => {
+  if (!LAN_PASSCODE) throw new HttpError(404, 'Wi-Fi access is off');
+  if (!isLoopback(req)) throw new HttpError(403, 'Phones can only be connected from the computer running the app');
+  for (const [c, until] of pairCodes) if (until < Date.now()) pairCodes.delete(c);
+  const code = randomBytes(24).toString('base64url');
+  const expiresAt = Date.now() + PAIR_TTL;
+  pairCodes.set(code, expiresAt);
+  const links = await Promise.all(
+    lanAddresses().map(async (ip) => {
+      const url = `http://${ip}:${PORT}/pair/${code}`;
+      return { url, svg: await QRCode.toString(url, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }) };
+    }),
+  );
+  res.json({ links, expiresAt });
+});
+
+app.get('/pair/:code', (req, res) => {
+  const until = LAN_PASSCODE && pairCodes.get(req.params.code);
+  pairCodes.delete(req.params.code); // one use only, even if expired
+  if (!until || until < Date.now()) return res.redirect('/?pair=failed');
+  giveSession(res);
+  res.redirect('/');
 });
 
 app.use('/api', (req, res, next) => {
@@ -383,7 +420,7 @@ app.use('/api', (req, res, next) => {
 });
 
 app.get('/api/meta', (req, res) => {
-  res.json({ categories: CATEGORIES, dataDir: DATA_DIR, fileTypes: Object.keys(FILE_TYPES), lan: !!LAN_PASSCODE });
+  res.json({ categories: CATEGORIES, dataDir: DATA_DIR, fileTypes: Object.keys(FILE_TYPES), lan: !!LAN_PASSCODE, onThisComputer: isLoopback(req) });
 });
 
 app.get('/api/facets', (req, res) => {
@@ -719,10 +756,7 @@ app.listen(PORT, HOST, () => {
   console.log(`Contract Desk running at http://127.0.0.1:${PORT}`);
   console.log(`Data folder: ${DATA_DIR}`);
   if (LAN_PASSCODE) {
-    // Skip virtual adapters (Docker, VMs) that a phone can't reach.
-    for (const [name, nets] of Object.entries(os.networkInterfaces()))
-      for (const n of nets)
-        if (n.family === 'IPv4' && !n.internal && !/^(docker|br-|veth|virbr|vmnet|vboxnet)/.test(name))
-          console.log(`Wi-Fi access ON (passcode required): http://${n.address}:${PORT}`);
+    for (const ip of lanAddresses()) console.log(`Wi-Fi access ON (passcode required): http://${ip}:${PORT}`);
+    console.log('To connect a phone without typing the passcode: open the app here and use "Connect phone".');
   }
 });

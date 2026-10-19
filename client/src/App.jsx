@@ -117,7 +117,14 @@ export default function App() {
 // Shown to devices on the Wi-Fi when access is on; this computer never sees it.
 function PasscodeScreen() {
   const [code, setCode] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(() =>
+    new URLSearchParams(location.search).get('pair') === 'failed'
+      ? 'That QR code was already used or has expired. Show a new one on your computer, or enter the passcode.'
+      : '',
+  );
+  useEffect(() => {
+    if (location.search) history.replaceState(null, '', location.pathname + location.hash);
+  }, []);
   const submit = async (e) => {
     e.preventDefault();
     setError('');
@@ -151,6 +158,68 @@ function PasscodeScreen() {
   );
 }
 
+// Shows a one-time QR code; scanning it on a phone on the same Wi-Fi unlocks the app there without the passcode.
+function ConnectPhone() {
+  const [open, setOpen] = useState(false);
+  const [pair, setPair] = useState(null);
+  const [error, setError] = useState('');
+  const [now, setNow] = useState(Date.now());
+  const newCode = () => {
+    setError('');
+    api('POST', '/api/pair')
+      .then((p) => (setNow(Date.now()), setPair(p)))
+      .catch((e) => setError(e.message));
+  };
+  useEffect(() => {
+    if (!open) return;
+    newCode();
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [open]);
+  const left = pair ? Math.max(0, Math.round((pair.expiresAt - now) / 1000)) : 0;
+  return (
+    <>
+      <button className="rail-connect" onClick={() => setOpen(true)}>
+        <Icon name="qr" /> Connect phone
+      </button>
+      {open && (
+        <Modal title="Connect a phone" kicker="Scan with the phone's camera" onClose={() => (setOpen(false), setPair(null))}>
+          <div className="modal-body pair">
+            {error && <p className="form-error">{error}</p>}
+            {pair && !pair.links.length && <p className="form-error">This computer has no Wi-Fi network address right now.</p>}
+            {pair?.links.map((l) => (
+              <figure key={l.url} className={`pair-code ${left ? '' : 'is-expired'}`}>
+                <img src={`data:image/svg+xml;utf8,${encodeURIComponent(l.svg)}`} alt="QR code to connect a phone" />
+                <figcaption className="mono">{l.url.replace(/\/pair\/.*/, '')}</figcaption>
+              </figure>
+            ))}
+            {pair && (
+              <p className="pair-note">
+                {left ? (
+                  <>
+                    Works <strong>once</strong>, for the next <span className="mono">{`${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`}</span>. The phone must be on the
+                    same Wi-Fi and stays connected for 30 days.
+                  </>
+                ) : (
+                  <strong>This code has expired.</strong>
+                )}
+              </p>
+            )}
+          </div>
+          <footer className="modal-foot">
+            <button className="btn" onClick={newCode}>
+              New code
+            </button>
+            <button className="btn btn-primary" onClick={() => (setOpen(false), setPair(null))}>
+              Done
+            </button>
+          </footer>
+        </Modal>
+      )}
+    </>
+  );
+}
+
 function Rail({ section, facets, meta }) {
   const n = (v) => v.toLocaleString();
   return (
@@ -177,6 +246,7 @@ function Rail({ section, facets, meta }) {
           <span className="count">{n(facets.counts.nocs)}</span>
         </a>
       </nav>
+      {meta.lan && meta.onThisComputer && <ConnectPhone />}
       <div className="rail-stat">
         <span className="kicker">Documents filed</span>
         <span className="rail-big">{n(facets.counts.documents)}</span>

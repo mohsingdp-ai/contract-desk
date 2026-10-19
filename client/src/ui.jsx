@@ -13,6 +13,7 @@ const ICONS = {
   open: 'M14 4h6v6m0-6-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5',
   arrow: 'M5 12h14m0 0-6-6m6 6-6 6',
   sheet: 'M4 4h16v16H4zM4 10h16M4 15h16M10 4v16',
+  qr: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2M14 18h2v2M18 18h2v2h-2z',
 };
 
 export function Icon({ name, size = 16 }) {

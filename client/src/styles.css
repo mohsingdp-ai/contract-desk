@@ -228,6 +228,64 @@ mark {
   padding: 0 6px;
 }
 
+.rail-connect {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1.5px solid var(--signal);
+  background: none;
+  color: var(--rail-ink);
+  font-stretch: 85%;
+  font-weight: 650;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.rail-connect:hover {
+  background: var(--signal);
+  color: #fff;
+}
+
+.pair {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.pair-code {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.pair-code img {
+  width: min(280px, 70vw);
+  height: auto;
+  padding: 10px;
+  background: #fff; /* QR codes need a light quiet zone, also in dark mode */
+  border: 1.5px solid var(--ink);
+  image-rendering: pixelated;
+}
+.pair-code.is-expired img {
+  opacity: 0.15;
+}
+.pair-code figcaption {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.pair-note {
+  margin: 0;
+  max-width: 420px;
+  text-align: center;
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
 .rail-stat {
   display: flex;
   flex-direction: column;

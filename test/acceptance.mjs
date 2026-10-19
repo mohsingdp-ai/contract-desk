@@ -293,7 +293,7 @@ try {
         assert.equal(ok.status, 200);
         const cookie = ok.headers.get('set-cookie');
         assert.match(cookie, /HttpOnly/i);
-        assert.match(cookie, /SameSite=Strict/i);
+        assert.match(cookie, /SameSite=Lax/i);
         const session = cookie.split(';')[0];
         assert.equal((await fetch(`${L}/api/contracts`, { headers: { Cookie: session } })).status, 200);
         assert.equal((await fetch(`${L}/api/contracts`, { headers: { Cookie: 'cd_session=forged' } })).status, 401);
@@ -304,6 +304,33 @@ try {
           );
         assert.equal(await hostStatus('evil.example:4792'), 403, 'DNS-rebinding style Host refused');
         assert.equal(await hostStatus(`${lanIp}:4792`), 200);
+      });
+      await check('Wi-Fi access: QR pairing link unlocks a phone once, and only the computer can make one', async () => {
+        const fromPhone = await fetch(`${L}/api/pair`, { method: 'POST' });
+        assert.equal(fromPhone.status, 403, 'a locked phone cannot make a code');
+        const login = await fetch(`${L}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"passcode":"harbor-2026"}' });
+        const session = login.headers.get('set-cookie').split(';')[0];
+        const fromPairedPhone = await fetch(`${L}/api/pair`, { method: 'POST', headers: { Cookie: session } });
+        assert.equal(fromPairedPhone.status, 403, 'even an unlocked phone cannot add devices');
+
+        const made = await (await fetch('http://127.0.0.1:4792/api/pair', { method: 'POST' })).json();
+        assert.ok(made.expiresAt - Date.now() > 9 * 60_000 && made.expiresAt - Date.now() <= 10 * 60_000);
+        const link = made.links.find((l) => l.url.startsWith(`http://${lanIp}:4792/pair/`));
+        assert.ok(link, 'link uses the Wi-Fi address');
+        assert.match(link.svg, /^<svg/);
+        assert.ok(!link.url.includes('harbor-2026'), 'the passcode itself is never in the QR');
+
+        const scan = await fetch(link.url, { redirect: 'manual' });
+        assert.equal(scan.status, 302);
+        assert.equal(scan.headers.get('location'), '/');
+        const paired = scan.headers.get('set-cookie').split(';')[0];
+        assert.equal((await fetch(`${L}/api/contracts`, { headers: { Cookie: paired } })).status, 200, 'scanned phone is unlocked');
+
+        const again = await fetch(link.url, { redirect: 'manual' });
+        assert.equal(again.headers.get('location'), '/?pair=failed', 'second scan of the same code fails');
+        assert.equal(again.headers.get('set-cookie'), null);
+        const bogus = await fetch(`${L}/pair/made-up-code`, { redirect: 'manual' });
+        assert.equal(bogus.headers.get('location'), '/?pair=failed');
       });
       await check('Wi-Fi access: repeated wrong passcodes lock the device out', async () => {
         const tryCode = (c) => fetch(`${L}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passcode: c }) }).then((r) => r.status);

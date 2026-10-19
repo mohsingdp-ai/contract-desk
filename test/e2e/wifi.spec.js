@@ -32,3 +32,36 @@ test('phone on Wi-Fi: passcode screen, wrong code refused, right code unlocks an
   await page.reload();
   await expect(page.getByRole('heading', { level: 1, name: 'WIFI-001' })).toBeVisible();
 });
+
+test('phone scans the QR code shown on the computer and is unlocked without the passcode', async ({ browser }) => {
+  // The computer: open the app locally and show a code.
+  const computer = await browser.newPage({ baseURL: `http://127.0.0.1:${LAN_PORT}` });
+  await computer.goto('/');
+  await computer.getByRole('button', { name: 'Connect phone' }).click();
+  const dialog = computer.getByRole('dialog');
+  await expect(dialog.getByRole('img', { name: 'QR code to connect a phone' }).first()).toBeVisible();
+  await expect(dialog).toContainText('Works once');
+  const src = await dialog.getByRole('img').first().getAttribute('src');
+  expect(src).toMatch(/^data:image\/svg\+xml/);
+  // What the camera reads: ask the server for the same kind of link the QR encodes.
+  const { links } = await (await computer.request.post('/api/pair')).json();
+  const link = links.find((l) => l.url.includes(lanIp)).url;
+  await computer.close();
+
+  // The phone: a fresh device that never entered the passcode.
+  const phone = await browser.newContext({ ...pixel, baseURL: `http://${lanIp}:${LAN_PORT}` });
+  const page = await phone.newPage();
+  await page.goto(link);
+  await expect(page).toHaveURL(`http://${lanIp}:${LAN_PORT}/`);
+  await expect(page.locator('.search-hero')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Enter passcode' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Connect phone' })).toHaveCount(0); // only the computer can add devices
+
+  // A second phone scanning the same (used) code gets a clear message.
+  const other = await (await browser.newContext({ ...pixel })).newPage();
+  await other.goto(link);
+  await expect(other.getByRole('heading', { name: 'Enter passcode' })).toBeVisible();
+  await expect(other.locator('.form-error')).toContainText('already used or has expired');
+  await expect(other).toHaveURL(`http://${lanIp}:${LAN_PORT}/`); // message shown, address cleaned up
+  await phone.close();
+});

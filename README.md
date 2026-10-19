@@ -33,7 +33,10 @@ Copy `.env.example` to `.env` and edit:
 Set `LAN_PASSCODE` in `.env` (6+ characters) and restart. The app then also listens on your
 network and prints the address to open on your phone, e.g. `http://192.168.1.13:4780`.
 
-- Phones must enter the passcode once; it is remembered for 30 days. This computer never asks.
+- **Easiest: scan a QR code.** On this computer, open http://127.0.0.1:4780 and click
+  **Connect phone**, then scan the code with the phone's camera. The phone opens the app already
+  unlocked. Each code works once and expires after 10 minutes; it never contains the passcode.
+- Or type the passcode on the phone. Either way it is remembered for 30 days. This computer never asks.
 - Changing the passcode logs every phone out. 5 wrong tries lock that device out for 5 minutes.
 - The phone must be on the same Wi-Fi. Your firewall may need to allow the port.
 - Traffic is plain HTTP: use it on your own home/office Wi-Fi, not on public networks.
@@ -71,7 +74,7 @@ Renaming a document only changes `display_name`; the stored file and parent neve
 ```bash
 npm run dev     # API on :4780 with auto-restart + Vite on :5173 (proxies /api)
 npm test        # end-to-end acceptance checks against a throwaway data folder
-npm run build && npm run test:e2e   # 29 browser-driven UI tests (desktop, phone, Wi-Fi passcode)
+npm run build && npm run test:e2e   # 30 browser-driven UI tests (desktop, phone, Wi-Fi passcode, QR)
 ```
 
 The UI tests use the system Chromium (`/usr/bin/chromium` or Google Chrome) when present.
