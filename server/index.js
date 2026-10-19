@@ -7,7 +7,7 @@ import { randomUUID, randomBytes, createHash, createHmac, timingSafeEqual } from
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
-import { openDb, tx, tagKey, CATEGORIES } from './db.js';
+import { openDb, tx, tagKey } from './db.js';
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || 'data');
 const PORT = Number(process.env.PORT || 4780);
@@ -313,13 +313,16 @@ function nocInput(b) {
   return [indent_no, noc_name];
 }
 
+const categoryNames = () => db.prepare('SELECT name FROM categories ORDER BY position, id').all().map((r) => r.name);
+
 function docMetaInput(m, parentType, fallbackName) {
   const display_name = str(m.display_name) || fallbackName;
   const reference_no = str(m.reference_no) || null;
   let category = null;
   if (parentType === 'contract') {
-    category = str(m.category);
-    if (!CATEGORIES.includes(category)) bad(`Choose a valid category for "${display_name}"`);
+    // Case-insensitive match, stored with the category's own spelling.
+    category = db.prepare('SELECT name FROM categories WHERE name = ?').get(str(m.category))?.name;
+    if (!category) bad(`Choose a valid category for "${display_name}"`);
   }
   return { display_name, reference_no, category };
 }
@@ -420,7 +423,66 @@ app.use('/api', (req, res, next) => {
 });
 
 app.get('/api/meta', (req, res) => {
-  res.json({ categories: CATEGORIES, dataDir: DATA_DIR, fileTypes: Object.keys(FILE_TYPES), lan: !!LAN_PASSCODE, onThisComputer: isLoopback(req) });
+  res.json({ categories: categoryNames(), dataDir: DATA_DIR, fileTypes: Object.keys(FILE_TYPES), lan: !!LAN_PASSCODE, onThisComputer: isLoopback(req) });
+});
+
+// ---------- categories (editable per-contract checklist) ----------
+
+const categoryName = (v) => {
+  const name = str(v).replace(/\s+/g, ' ');
+  if (!name) bad('Category name is required');
+  if (name.length > 60) bad('Keep category names to 60 characters or fewer');
+  return name;
+};
+const getCategory = (id) => {
+  const cat = db.prepare('SELECT * FROM categories WHERE id = ?').get(id);
+  if (!cat) throw new HttpError(404, 'Category not found');
+  return cat;
+};
+const listCategories = () =>
+  db.prepare(`SELECT c.id, c.name, c.position, (SELECT count(*) FROM documents d WHERE d.category = c.name) AS doc_count FROM categories c ORDER BY c.position, c.id`).all();
+
+app.get('/api/categories', (req, res) => res.json(listCategories()));
+
+app.post('/api/categories', (req, res) => {
+  const name = categoryName(req.body?.name);
+  db.prepare('INSERT INTO categories (name, position) VALUES (?, (SELECT coalesce(max(position), 0) + 1 FROM categories))').run(name);
+  res.status(201).json(listCategories());
+});
+
+// Rename (documents follow through ON UPDATE CASCADE) and/or move one step up or down.
+app.patch('/api/categories/:id', (req, res) => {
+  tx(db, () => {
+    const cat = getCategory(req.params.id);
+    if (req.body?.name !== undefined) db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(categoryName(req.body.name), cat.id);
+    if (req.body?.move === 'up' || req.body?.move === 'down') {
+      const all = listCategories();
+      const i = all.findIndex((c) => c.id === cat.id);
+      const j = req.body.move === 'up' ? i - 1 : i + 1;
+      if (all[j]) {
+        // Renumber in the new order so equal or gapped positions can never confuse the swap.
+        [all[i], all[j]] = [all[j], all[i]];
+        all.forEach((c, k) => db.prepare('UPDATE categories SET position = ? WHERE id = ?').run(k + 1, c.id));
+      }
+    }
+  });
+  res.json(listCategories());
+});
+
+// A category that still has documents is only removed after they move to another category: no file is ever lost.
+app.delete('/api/categories/:id', (req, res) => {
+  tx(db, () => {
+    const cat = getCategory(req.params.id);
+    if (db.prepare('SELECT count(*) AS n FROM categories').get().n <= 1) throw new HttpError(409, 'Keep at least one category');
+    const { n } = db.prepare('SELECT count(*) AS n FROM documents WHERE category = ?').get(cat.name);
+    if (n) {
+      const target = req.query.move_to && db.prepare('SELECT * FROM categories WHERE id = ?').get(req.query.move_to);
+      if (!target || target.id === cat.id) throw new HttpError(409, `"${cat.name}" still has ${n} document${n > 1 ? 's' : ''}. Choose a category to move ${n > 1 ? 'them' : 'it'} to.`);
+      db.prepare('UPDATE documents SET category = ? WHERE category = ?').run(target.name, cat.name);
+    }
+    db.prepare('DELETE FROM categories WHERE id = ?').run(cat.id);
+  });
+  res.json(listCategories());
 });
 
 app.get('/api/facets', (req, res) => {
@@ -659,6 +721,7 @@ app.get('/api/export.xlsx', async (req, res) => {
   };
 
   if (scope !== 'nocs') {
+    const cats = categoryNames();
     sheet(
       'Contracts',
       [
@@ -668,11 +731,11 @@ app.get('/api/export.xlsx', async (req, res) => {
         { header: 'Amount', key: 'amount', width: 16, style: { numFmt: '#,##0.00' } },
         { header: 'Currency', key: 'currency', width: 10 },
         { header: 'Attachments', key: 'doc_count', width: 13 },
-        ...CATEGORIES.map((c, i) => ({ header: c, key: `cat${i}`, width: 16 })),
+        ...cats.map((c, i) => ({ header: c, key: `cat${i}`, width: 16 })),
         { header: 'Created', key: 'created_at', width: 22 },
         { header: 'Updated', key: 'updated_at', width: 22 },
       ],
-      contracts.map((c) => ({ ...c, ...Object.fromEntries(CATEGORIES.map((cat, i) => [`cat${i}`, perCategory.get(`${c.id}|${cat}`) || 0])) })),
+      contracts.map((c) => ({ ...c, ...Object.fromEntries(cats.map((cat, i) => [`cat${i}`, perCategory.get(`${c.id}|${cat}`) || 0])) })),
     );
   }
   if (scope !== 'contracts') {
@@ -736,6 +799,7 @@ app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) status = 400;
   else if (msg.includes('UNIQUE constraint failed: contracts.contract_no')) (status = 409), (message = 'That Contract No. already exists');
   else if (msg.includes('UNIQUE constraint failed: nocs.indent_no')) (status = 409), (message = 'That Indent No. already exists');
+  else if (msg.includes('UNIQUE constraint failed: categories.name')) (status = 409), (message = 'A category with that name already exists');
   else if (msg.includes('constraint failed')) (status = 400), (message = 'The data breaks a database rule: ' + msg);
   if (status >= 500) console.error(err);
   res.status(status).json({ error: message });

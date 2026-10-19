@@ -17,11 +17,15 @@ const systemChromium = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/
 export default defineConfig({
   testDir: 'test/e2e',
   workers: 1,
-  timeout: 30_000,
+  timeout: process.env.WATCH ? 120_000 : 30_000,
   reporter: [['list']],
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
-    launchOptions: systemChromium && !process.env.PW_BUNDLED ? { executablePath: systemChromium } : {},
+    launchOptions: {
+      ...(systemChromium && !process.env.PW_BUNDLED ? { executablePath: systemChromium } : {}),
+      // WATCH=1: visible Chrome, slowed down, with DevTools open, so a person can follow each step.
+      ...(process.env.WATCH ? { headless: false, slowMo: Number(process.env.WATCH_SLOWMO || 350), args: ['--auto-open-devtools-for-tabs', '--window-size=1600,1000'] } : {}),
+    },
     trace: 'retain-on-failure',
   },
   webServer: [

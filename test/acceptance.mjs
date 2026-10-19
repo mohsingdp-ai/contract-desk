@@ -265,6 +265,99 @@ try {
     assert.equal(await hostStatus(`localhost:${PORT}`), 200);
   });
 
+  await check('categories: add, rename (documents follow), reorder, and remove only after moving documents', async () => {
+    const names = async () => (await api('GET', '/api/categories')).body.map((c) => c.name);
+    const byName = async (n) => (await api('GET', '/api/categories')).body.find((c) => c.name === n);
+    assert.deepEqual((await names()).slice(0, 2), ['Bank Payment Documents', 'Commercial Invoice']);
+
+    assert.equal((await api('POST', '/api/categories', { name: '  Insurance   Certificate ' })).status, 201);
+    assert.ok((await names()).includes('Insurance Certificate'), 'trimmed and single-spaced');
+    assert.equal((await api('POST', '/api/categories', { name: 'insurance certificate' })).status, 409, 'no case duplicates');
+    assert.equal((await api('POST', '/api/categories', { name: '   ' })).status, 400);
+    assert.deepEqual((await api('GET', '/api/meta')).body.categories, await names(), 'upload and filter lists follow');
+
+    const c = (await api('POST', '/api/contracts', { contract_no: 'CAT-001', project_name: 'p', firm_name: 'f', amount: 1, currency: 'USD' })).body;
+    const up = await api('POST', `/api/contracts/${c.id}/documents`, form([['policy.pdf', PDF], ['cert.pdf', PDF]], [{ category: 'insurance certificate' }, { category: 'Insurance Certificate' }]));
+    assert.equal(up.status, 201, JSON.stringify(up.body));
+    assert.ok(up.body.every((d) => d.category === 'Insurance Certificate'), 'stored with the category spelling');
+
+    const ins = await byName('Insurance Certificate');
+    assert.equal(ins.doc_count, 2);
+    await api('PATCH', `/api/categories/${ins.id}`, { name: 'Insurance Policy' });
+    const docs = (await api('GET', `/api/contracts/${c.id}`)).body.documents;
+    assert.ok(docs.every((d) => d.category === 'Insurance Policy'), 'rename follows into every document');
+    assert.equal((await api('GET', '/api/documents?category=Insurance%20Policy')).body.total, 2);
+
+    const before = await names();
+    await api('PATCH', `/api/categories/${ins.id}`, { move: 'up' });
+    const after = await names();
+    assert.equal(after.indexOf('Insurance Policy'), before.indexOf('Insurance Policy') - 1);
+
+    const refused = await api('DELETE', `/api/categories/${ins.id}`);
+    assert.equal(refused.status, 409);
+    assert.match(refused.body.error, /still has 2 documents/);
+    const other = await byName('Other Documents');
+    assert.equal((await api('DELETE', `/api/categories/${ins.id}?move_to=${other.id}`)).status, 200);
+    assert.ok(!(await names()).includes('Insurance Policy'));
+    const moved = (await api('GET', `/api/contracts/${c.id}`)).body.documents;
+    assert.equal(moved.length, 2, 'no document lost');
+    assert.ok(moved.every((d) => d.category === 'Other Documents'));
+
+    // Export columns follow the current list.
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load((await api('GET', '/api/export.xlsx?scope=contracts')).body);
+    const head = wb.getWorksheet('Contracts').getRow(1).values;
+    assert.ok(head.includes('Other Documents') && !head.includes('Insurance Policy'));
+
+    await api('DELETE', `/api/contracts/${c.id}`);
+  });
+
+  await check('categories: an old database with the fixed list is upgraded with nothing lost', async () => {
+    const oldDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contract-desk-old-'));
+    fs.mkdirSync(path.join(oldDir, 'files'));
+    fs.writeFileSync(path.join(oldDir, 'files', 'a.pdf'), PDF);
+    const old = new DatabaseSync(path.join(oldDir, 'contracts.db'));
+    old.exec(`
+      CREATE TABLE contracts (id INTEGER PRIMARY KEY, contract_no TEXT NOT NULL UNIQUE COLLATE NOCASE, project_name TEXT NOT NULL DEFAULT '', firm_name TEXT NOT NULL DEFAULT '',
+        amount REAL NOT NULL, currency TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ')));
+      CREATE TABLE nocs (id INTEGER PRIMARY KEY, indent_no TEXT NOT NULL UNIQUE COLLATE NOCASE, noc_name TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ')));
+      CREATE TABLE documents (id INTEGER PRIMARY KEY, contract_id INTEGER REFERENCES contracts (id) ON DELETE CASCADE, noc_id INTEGER REFERENCES nocs (id) ON DELETE CASCADE,
+        display_name TEXT NOT NULL, original_name TEXT NOT NULL, storage_name TEXT NOT NULL UNIQUE, file_path TEXT NOT NULL UNIQUE, mime_type TEXT NOT NULL, file_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL, category TEXT CHECK (category IN ('Bank Payment Documents', 'Commercial Invoice', 'Packing List', 'Bill of Lading / Airway Bill', 'Goods Declaration (GD)', 'Other Documents')),
+        reference_no TEXT, uploaded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ')), CHECK ((contract_id IS NULL) <> (noc_id IS NULL)), CHECK ((contract_id IS NOT NULL) = (category IS NOT NULL)));
+      CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL, key TEXT NOT NULL UNIQUE);
+      CREATE TABLE document_tags (document_id INTEGER NOT NULL REFERENCES documents (id) ON DELETE CASCADE, tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE, PRIMARY KEY (document_id, tag_id)) WITHOUT ROWID;
+      INSERT INTO contracts (id, contract_no, amount, currency) VALUES (1, 'OLD-001', 5, 'USD');
+      INSERT INTO documents (id, contract_id, display_name, original_name, storage_name, file_path, mime_type, file_type, size_bytes, category, reference_no)
+        VALUES (7, 1, 'Old invoice', 'a.pdf', 'a.pdf', 'files/a.pdf', 'application/pdf', 'pdf', 10, 'Packing List', 'REF-OLD-1');
+      INSERT INTO tags (id, name, key) VALUES (1, 'Legacy', 'legacy');
+      INSERT INTO document_tags VALUES (7, 1);`);
+    old.close();
+    const s2 = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, DATA_DIR: oldDir, PORT: '4795', LAN_PASSCODE: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
+    try {
+      await new Promise((resolve) => s2.stdout.on('data', (b) => String(b).includes('running at') && resolve()));
+      const B2 = 'http://127.0.0.1:4795';
+      const doc = await (await fetch(`${B2}/api/documents/7`)).json();
+      assert.equal(doc.category, 'Packing List');
+      assert.deepEqual(doc.tags, ['Legacy'], 'tags survive the table rebuild');
+      assert.equal(doc.reference_no, 'REF-OLD-1');
+      assert.equal((await (await fetch(`${B2}/api/documents?q=REF-OLD`)).json()).total, 1, 'search index still matches');
+      assert.equal((await fetch(`${B2}/api/documents/7/file`)).status, 200);
+      const add = await fetch(`${B2}/api/categories`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"name":"Certificate of Origin"}' });
+      assert.equal(add.status, 201);
+      const patched = await fetch(`${B2}/api/documents/7`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{"category":"Certificate of Origin"}' });
+      assert.equal((await patched.json()).category, 'Certificate of Origin', 'old database now accepts new categories');
+      const db2 = new DatabaseSync(path.join(oldDir, 'contracts.db'));
+      assert.equal(db2.prepare('PRAGMA foreign_key_check').all().length, 0);
+      assert.ok(!/CHECK \(category IN/.test(db2.prepare(`SELECT sql FROM sqlite_schema WHERE name = 'documents'`).get().sql));
+      db2.close();
+    } finally {
+      s2.kill();
+      fs.rmSync(oldDir, { recursive: true, force: true });
+    }
+  });
+
   // Wi-Fi access: a second server with a passcode, reached through this machine's network address like a phone would.
   const lanIp = Object.values(os.networkInterfaces()).flat().find((n) => n.family === 'IPv4' && !n.internal)?.address;
   await check('Wi-Fi access: refuses a short passcode', async () => {

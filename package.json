@@ -1,6 +1,6 @@
 {
   "name": "contract-desk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Local Contract & Document Manager",
@@ -17,7 +17,8 @@
     "dist": "vite build && electron-builder --linux AppImage --win nsis",
     "dist:linux": "vite build && electron-builder --linux AppImage",
     "dist:win": "vite build && electron-builder --win nsis",
-    "demo:video": "node scripts/record-demo.mjs"
+    "demo:video": "node scripts/record-demo.mjs",
+    "test:e2e:watch": "WATCH=1 playwright test test/e2e/app.spec.js test/e2e/categories.spec.js"
   },
   "dependencies": {
     "exceljs": "^4.4.0",

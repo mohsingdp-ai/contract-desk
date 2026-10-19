@@ -26,6 +26,8 @@ Windows asks once to allow it on private networks: click **Allow**. On Linux wit
 ## Good to know
 
 - **Search** looks at contract and indent numbers, names, filenames, Reference No. and tags. Exact matches come first.
+- **Document categories** (Bank Payment Documents, Commercial Invoice, …) are yours to change: sidebar → **Document categories**
+  to add, rename, reorder or remove them. Removing one moves its documents to another category first.
 - **Deleting** a contract or NOC also deletes its documents and their files. The app always asks first.
 - **Menu → File:** open or change the data folder, start with the computer.
 - Not in this version: searching inside files (OCR), backup/restore.

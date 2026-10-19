@@ -19,6 +19,7 @@ const ICONS = {
   moon: 'M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5Z',
   check: 'M5 12.5l4.5 4.5L19 7.5',
   chevron: 'M6 9l6 6 6-6',
+  chevronUp: 'M6 15l6-6 6 6',
 };
 
 export function Icon({ name, size = 16 }) {

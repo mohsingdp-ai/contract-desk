@@ -59,7 +59,7 @@ export default function App() {
   const [route, go] = useRoute();
   const [version, setVersion] = useState(0);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
-  const { data: meta } = useData('/api/meta', 0);
+  const { data: meta } = useData('/api/meta', version); // categories can change while the app is open
   const { data: facets } = useData('/api/facets', version);
   const [needPasscode, setNeedPasscode] = useState(false);
   useEffect(() => {
@@ -106,6 +106,7 @@ export default function App() {
         {section === 'contracts' && id && <ContractDetail {...ctx} id={id} />}
         {section === 'nocs' && !id && <NocsPage {...ctx} />}
         {section === 'nocs' && id && <NocDetail {...ctx} id={id} />}
+        {section === 'categories' && <CategoriesPage {...ctx} />}
       </main>
       {doc && (
         <DocDrawer id={doc} meta={meta} tagSuggestions={ctx.tagNames} onClose={() => go(route.path, params)} onChanged={bump} onOpenParent={ctx.openParent} />
@@ -264,6 +265,9 @@ function Rail({ section, facets, meta }) {
         </a>
       </nav>
       {meta.lan && meta.onThisComputer && <ConnectPhone />}
+      <a className={`rail-sub ${section === 'categories' ? 'is-active' : ''}`} href="#/categories">
+        <Icon name="edit" /> Document categories
+      </a>
       <ThemeSwitch />
       <p className="rail-stat">
         <span className="mono">{n(facets.counts.documents)}</span> documents filed
@@ -868,6 +872,11 @@ function ContractDetail({ id, go, meta, facets, version, bump, openDoc, tagNames
         </div>
       </dl>
 
+      <div className="groups-head">
+        <a className="btn-link" href="#/categories">
+          Edit categories
+        </a>
+      </div>
       <div className="groups">
         {meta.categories.map((cat) => (
           <DocGroup
@@ -910,6 +919,139 @@ function ContractDetail({ id, go, meta, facets, version, bump, openDoc, tagNames
       )}
       {modal?.delDoc && <DeleteDocConfirm doc={modal.delDoc} onClose={close} onDeleted={bump} />}
     </div>
+  );
+}
+
+// ---------- categories ----------
+
+function CategoriesPage({ version, bump }) {
+  const { data: cats, error } = useData('/api/categories', version);
+  const [name, setName] = useState('');
+  const [message, setMessage] = useState('');
+  const [deleting, setDeleting] = useState(null);
+  const run = async (method, url, body) => {
+    setMessage('');
+    try {
+      await api(method, url, body);
+      bump();
+      return true;
+    } catch (err) {
+      setMessage(err.message);
+      return false;
+    }
+  };
+  const add = async (e) => {
+    e.preventDefault();
+    if (await run('POST', '/api/categories', { name })) setName('');
+  };
+  return (
+    <div className="page">
+      <a className="back" href="#/contracts">
+        <Icon name="back" size={14} /> Contracts
+      </a>
+      <PageHead title="Categories" count={cats?.length} />
+      <p className="page-intro">
+        The document types every contract is filed by. They appear in Add documents, on each contract, in filters and in the Excel export. Click a name to rename it: every
+        document already filed under it follows.
+      </p>
+      {(message || error) && <p className="form-error">{message || error}</p>}
+      {cats && (
+        <ol className="cat-list">
+          {cats.map((c, i) => (
+            <CategoryRow key={c.id} cat={c} first={i === 0} last={i === cats.length - 1} only={cats.length === 1} run={run} onDelete={() => setDeleting(c)} />
+          ))}
+        </ol>
+      )}
+      <form className="cat-add" onSubmit={add}>
+        <Field label="New category">
+          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder="e.g. Insurance Certificate" />
+        </Field>
+        <button className="btn btn-primary" disabled={!name.trim()}>
+          <Icon name="plus" /> Add category
+        </button>
+      </form>
+      {deleting && <DeleteCategoryConfirm cat={deleting} cats={cats} onClose={() => setDeleting(null)} onDone={bump} />}
+    </div>
+  );
+}
+
+function CategoryRow({ cat, first, last, only, run, onDelete }) {
+  const [name, setName] = useState(cat.name);
+  useEffect(() => setName(cat.name), [cat.name]);
+  const dirty = name.trim().replace(/\s+/g, ' ') !== cat.name;
+  const save = (e) => {
+    e.preventDefault();
+    if (dirty) run('PATCH', `/api/categories/${cat.id}`, { name });
+  };
+  const move = (dir) => run('PATCH', `/api/categories/${cat.id}`, { move: dir });
+  return (
+    <li className="cat-row">
+      <form className="cat-name" onSubmit={save}>
+        <input aria-label={`Name of ${cat.name}`} value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
+        {dirty && (
+          <>
+            <button className="btn btn-sm btn-primary">Save</button>
+            <button type="button" className="btn btn-sm" onClick={() => setName(cat.name)}>
+              Cancel
+            </button>
+          </>
+        )}
+      </form>
+      <span className="cat-count mono">
+        {cat.doc_count} document{cat.doc_count === 1 ? '' : 's'}
+      </span>
+      <div className="cat-actions">
+        <button className="btn-icon" disabled={first} onClick={() => move('up')} aria-label={`Move ${cat.name} up`} title="Move up">
+          <Icon name="chevronUp" />
+        </button>
+        <button className="btn-icon" disabled={last} onClick={() => move('down')} aria-label={`Move ${cat.name} down`} title="Move down">
+          <Icon name="chevron" />
+        </button>
+        <button className="btn-icon btn-icon-danger" disabled={only} onClick={onDelete} aria-label={`Delete ${cat.name}`} title={only ? 'Keep at least one category' : 'Delete'}>
+          <Icon name="trash" />
+        </button>
+      </div>
+    </li>
+  );
+}
+
+// Documents are never deleted with their category: they move to another one first.
+function DeleteCategoryConfirm({ cat, cats, onClose, onDone }) {
+  const others = cats.filter((c) => c.id !== cat.id);
+  const [target, setTarget] = useState(() => String((others.find((c) => c.name === 'Other Documents') || others[0]).id));
+  const n = cat.doc_count;
+  return (
+    <Confirm
+      title={`Delete “${cat.name}”?`}
+      confirmLabel={n ? `Move ${n} and delete` : 'Delete category'}
+      onClose={onClose}
+      onConfirm={async () => {
+        await api('DELETE', `/api/categories/${cat.id}${n ? `?move_to=${target}` : ''}`);
+        onDone();
+      }}
+    >
+      {n ? (
+        <>
+          <p>
+            <strong>
+              It has {n} document{n > 1 ? 's' : ''}. {n > 1 ? 'They are' : 'It is'} not deleted: choose where to move {n > 1 ? 'them' : 'it'}.
+            </strong>
+          </p>
+          <Field label="Move documents to">
+            <select value={target} onChange={(e) => setTarget(e.target.value)}>
+              {others.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </>
+      ) : (
+        <p>No documents are filed under it.</p>
+      )}
+      <p>It disappears from every contract page and from Add documents.</p>
+    </Confirm>
   );
 }
 

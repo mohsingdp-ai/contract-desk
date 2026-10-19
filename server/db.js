@@ -2,7 +2,8 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const CATEGORIES = [
+// Starting list for a new database; afterwards the owner edits categories in the app.
+export const DEFAULT_CATEGORIES = [
   'Bank Payment Documents',
   'Commercial Invoice',
   'Packing List',
@@ -14,6 +15,37 @@ export const CATEGORIES = [
 // Tag keys of one document, as searchable text.
 const TAGS_OF = (docId) =>
   `coalesce((SELECT group_concat(t.key, ' | ') FROM document_tags dt JOIN tags t ON t.id = dt.tag_id WHERE dt.document_id = ${docId}), '')`;
+
+// Document categories (the per-contract checklist). Documents point at a category by name, so a rename
+// cascades to every document; a category that still has documents cannot be deleted.
+const CATEGORIES_SCHEMA = `
+CREATE TABLE IF NOT EXISTS categories (
+  id       INTEGER PRIMARY KEY,
+  name     TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK (name = trim(name) AND name <> '' AND length(name) <= 60),
+  position INTEGER NOT NULL
+);
+`;
+
+// Each document belongs to exactly one Contract or one NOC (never both, never neither).
+// Contract documents must have a category; NOC documents have none.
+const documentsTable = (name) => `
+CREATE TABLE IF NOT EXISTS ${name} (
+  id            INTEGER PRIMARY KEY,
+  contract_id   INTEGER REFERENCES contracts (id) ON DELETE CASCADE,
+  noc_id        INTEGER REFERENCES nocs (id) ON DELETE CASCADE,
+  display_name  TEXT NOT NULL COLLATE NOCASE CHECK (display_name <> ''),
+  original_name TEXT NOT NULL COLLATE NOCASE,
+  storage_name  TEXT NOT NULL UNIQUE,
+  file_path     TEXT NOT NULL UNIQUE,
+  mime_type     TEXT NOT NULL,
+  file_type     TEXT NOT NULL CHECK (file_type IN ('pdf', 'image', 'excel')),
+  size_bytes    INTEGER NOT NULL CHECK (size_bytes >= 0),
+  category      TEXT REFERENCES categories (name) ON UPDATE CASCADE,
+  reference_no  TEXT COLLATE NOCASE CHECK (reference_no IS NULL OR (reference_no = trim(reference_no) AND reference_no <> '')),
+  uploaded_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ')),
+  CHECK ((contract_id IS NULL) <> (noc_id IS NULL)),
+  CHECK ((contract_id IS NOT NULL) = (category IS NOT NULL))
+);`;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS contracts (
@@ -41,25 +73,7 @@ CREATE TABLE IF NOT EXISTS nocs (
 CREATE INDEX IF NOT EXISTS nocs_name ON nocs (noc_name);
 CREATE INDEX IF NOT EXISTS nocs_updated ON nocs (updated_at);
 
--- Each document belongs to exactly one Contract or one NOC (never both, never neither).
--- Contract documents must have a category; NOC documents have none.
-CREATE TABLE IF NOT EXISTS documents (
-  id            INTEGER PRIMARY KEY,
-  contract_id   INTEGER REFERENCES contracts (id) ON DELETE CASCADE,
-  noc_id        INTEGER REFERENCES nocs (id) ON DELETE CASCADE,
-  display_name  TEXT NOT NULL COLLATE NOCASE CHECK (display_name <> ''),
-  original_name TEXT NOT NULL COLLATE NOCASE,
-  storage_name  TEXT NOT NULL UNIQUE,
-  file_path     TEXT NOT NULL UNIQUE,
-  mime_type     TEXT NOT NULL,
-  file_type     TEXT NOT NULL CHECK (file_type IN ('pdf', 'image', 'excel')),
-  size_bytes    INTEGER NOT NULL CHECK (size_bytes >= 0),
-  category      TEXT CHECK (category IN (${CATEGORIES.map((c) => `'${c}'`).join(', ')})),
-  reference_no  TEXT COLLATE NOCASE CHECK (reference_no IS NULL OR (reference_no = trim(reference_no) AND reference_no <> '')),
-  uploaded_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ')),
-  CHECK ((contract_id IS NULL) <> (noc_id IS NULL)),
-  CHECK ((contract_id IS NOT NULL) = (category IS NOT NULL))
-);
+${documentsTable('documents')}
 CREATE INDEX IF NOT EXISTS documents_contract ON documents (contract_id, category);
 CREATE INDEX IF NOT EXISTS documents_noc ON documents (noc_id);
 CREATE INDEX IF NOT EXISTS documents_reference ON documents (reference_no);
@@ -109,6 +123,12 @@ export function openDb(dataDir) {
   fs.mkdirSync(path.join(dataDir, 'files'), { recursive: true });
   const db = new DatabaseSync(path.join(dataDir, 'contracts.db'));
   db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
+  db.exec(CATEGORIES_SCHEMA);
+  if (!db.prepare('SELECT 1 FROM categories').get()) {
+    const add = db.prepare('INSERT INTO categories (name, position) VALUES (?, ?)');
+    DEFAULT_CATEGORIES.forEach((c, i) => add.run(c, i + 1));
+  }
+  migrateFixedCategories(db);
   db.exec(SCHEMA);
   // Build (or repair) the search index for databases created before it existed.
   const { docs, indexed } = db.prepare('SELECT (SELECT count(*) FROM documents) AS docs, (SELECT count(*) FROM doc_search) AS indexed').get();
@@ -119,6 +139,27 @@ export function openDb(dataDir) {
       FROM documents d;`);
   }
   return db;
+}
+
+// Databases from before editable categories have a CHECK that only allows the six original names.
+// SQLite cannot drop a CHECK, so rebuild the table (same ids, so tags and the search index still match).
+function migrateFixedCategories(db) {
+  const old = db.prepare(`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'documents'`).get();
+  if (!old || !/category\s+TEXT CHECK \(category IN/.test(old.sql)) return;
+  db.exec('PRAGMA foreign_keys = OFF'); // otherwise dropping the old table would cascade-delete every document's tags
+  try {
+    tx(db, () => {
+      db.exec(documentsTable('documents_new'));
+      db.exec(`INSERT INTO documents_new SELECT id, contract_id, noc_id, display_name, original_name, storage_name, file_path,
+                 mime_type, file_type, size_bytes, category, reference_no, uploaded_at FROM documents`);
+      db.exec('DROP TABLE documents');
+      db.exec('ALTER TABLE documents_new RENAME TO documents');
+      const broken = db.prepare('PRAGMA foreign_key_check').all();
+      if (broken.length) throw new Error(`Category upgrade found ${broken.length} broken reference(s); nothing was changed`);
+    });
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
 }
 
 export function tx(db, fn) {
