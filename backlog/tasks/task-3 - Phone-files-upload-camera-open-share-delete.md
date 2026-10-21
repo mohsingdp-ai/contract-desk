@@ -1,10 +1,10 @@
 ---
 id: TASK-3
 title: 'Phone files: upload, camera, open, share, delete'
-status: Review
+status: Done
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 12:15'
+updated_date: '2026-10-21 13:40'
 labels:
   - android
 milestone: m-0
