@@ -898,6 +898,12 @@ try {
   // ---------- backup and restore (TASK-5) ----------
 
   const sha = (b) => createHash('sha256').update(b).digest('hex');
+  // The texts of the elements that stick out of the screen on either side (on the phone that also widens the whole page).
+  const offScreen = (page, selector) =>
+    page.evaluate((selector) => {
+      const w = document.documentElement.clientWidth;
+      return [...document.querySelectorAll(selector)].filter((e) => e.getBoundingClientRect().left < 0 || e.getBoundingClientRect().right > w).map((e) => e.textContent);
+    }, selector);
   const tarEntries = async (bytes) => {
     const out = [];
     await readTar([bytes], (name) => {
@@ -972,6 +978,7 @@ try {
     await dialog.getByText(`Now: ${c + 1} contracts, ${n} NOCs, ${d} documents`).waitFor();
     await dialog.getByText(`After restoring: ${c} contracts, ${n} NOCs, ${d} documents`).waitFor();
     await dialog.getByText('Everything now in Contract Desk is replaced').waitFor();
+    assert.deepEqual(await offScreen(page, '.modal-foot > *'), [], 'both answers fit the screen'); // "Keep…" stuck out on the left
     await dialog.getByRole('button', { name: 'Keep current records' }).click();
     await dialog.waitFor({ state: 'detached' });
     assert.ok(contractNos(DEFAULT_DIR).includes('AFTER-BACKUP'));
@@ -983,6 +990,9 @@ try {
     fs.rmSync(DEFAULT_DIR, { recursive: true }); // the app and its folder wiped: every document file in the backup is new here
     const page = await launch('install-9');
     await page.getByRole('heading', { name: 'The desk is empty.' }).waitFor();
+    // Its three buttons (New contract, New NOC, Restore a backup…) fit the screen: in one row they stuck out on both sides,
+    // and on the phone that widened the whole page, so the restore dialog was cut off on the right.
+    assert.deepEqual(await offScreen(page, '.empty .row-gap > *'), [], 'empty-desk buttons outside the screen');
     const good = fs.readFileSync(backupFile);
     const entries = await tarEntries(good);
     const doc = entries.at(-1);

@@ -182,10 +182,6 @@ mark {
   background: var(--paper);
 }
 
-.passcode .modal-foot {
-  flex-wrap: wrap;
-}
-
 .boot {
   display: grid;
   place-items: center;
@@ -701,6 +697,7 @@ mark {
 
 .row-gap {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   justify-content: center;
 }
@@ -1438,6 +1435,7 @@ a.tr:hover {
 }
 .modal-foot {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
   gap: 10px;
