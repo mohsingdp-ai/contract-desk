@@ -4,7 +4,7 @@ title: 'Phone files: upload, camera, open, share, delete'
 status: Backlog
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 07:13'
+updated_date: '2026-10-21 08:06'
 labels:
   - android
 milestone: m-0
@@ -18,7 +18,7 @@ ordinal: 3000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Store documents in the app's private storage. Upload from files or camera, preview images in the app, open PDFs and Excel in the phone's own apps, save a copy, share, delete. Keep storage clean.
+Documents are stored in the data folder's files/ (decision-2), same layout as desktop, written in 4 MB pieces. Upload from files or camera, preview images in the app, open PDFs and Excel in the phone's own apps, save a copy, share, delete. Keep storage clean.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -33,4 +33,5 @@ Store documents in the app's private storage. Upload from files or camera, previ
 - [ ] #8 On start, files no record points to are removed (same as desktop)
 - [ ] #9 Has its own automated test that runs with npm test
 - [ ] #10 Category, Reference No. and tags can be set during upload, same as desktop
+- [ ] #11 Works in both modes: All files access, and folder picked with the system picker (incl. opening a PDF in picker mode)
 <!-- AC:END -->

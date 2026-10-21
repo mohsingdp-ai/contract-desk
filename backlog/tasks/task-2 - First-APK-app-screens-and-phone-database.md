@@ -4,7 +4,7 @@ title: 'First APK: app screens and phone database'
 status: Backlog
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 08:01'
+updated_date: '2026-10-21 08:06'
 labels:
   - android
 milestone: m-0
@@ -34,8 +34,12 @@ Add Capacitor, build an Android APK that shows the current screens and saves rec
 - [ ] #8 Document categories: add, rename, reorder, remove (moves its documents first)
 - [ ] #9 Desktop-only parts (phone access, QR, data-folder picker) are hidden on the phone
 - [ ] #10 Has its own automated test that runs with npm test
-- [ ] #11 Safety copy: within a few seconds of every change the database is also saved as a file in the app's own folder; if the WebView storage is wiped, the app restores everything from that copy at start (tested by wiping it on the real phone)
-- [ ] #12 minSdkVersion 29; on a WebView too old for the database, the app says 'Update Android System WebView' instead of failing
+- [ ] #11 Data folder (decision-2): first launch asks for All files access and uses Documents/Contract Desk (contracts.db + files/, same layout as desktop); user can choose another folder with the system picker; choosing a folder with records opens them
+- [ ] #12 Uninstall, then reinstall or install a newer version: the same records open automatically once the permission is on (tested on the real phone)
+- [ ] #13 Permission refused: user picks the folder with the system picker and everything works; nothing is lost
+- [ ] #14 Database copy saved to the folder ~2 s after the last change, never half-written; startup picks the right copy and recovers from a leftover contracts.db.tmp
+- [ ] #15 A folder made by the desktop app (WAL mode) opens on the phone, and the phone's folder opens on the desktop
+- [ ] #16 minSdkVersion 30 (Android 11); a WebView too old for the database shows 'Update Android System WebView' instead of failing
 <!-- AC:END -->
 
 ## Implementation Notes

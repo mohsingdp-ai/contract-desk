@@ -6,3 +6,4 @@ test-results
 playwright-report
 .impeccable
 release
+.claude/settings.local.json
