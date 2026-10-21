@@ -304,6 +304,11 @@ try {
     device.free = 300 * 1024 ** 2;
     await page.reload();
     await page.getByText('The phone is nearly full: only 300.0 MB free. Free up space before adding documents').waitFor();
+    // the same warning in the upload dialog
+    await page.goto(`${BASE}#/contracts`);
+    await page.getByText('CT-001').first().click();
+    await page.locator('.page-actions').getByRole('button', { name: 'Add documents' }).click();
+    await page.locator('.modal').getByText('The phone is nearly full: only 300.0 MB free. Free up space before adding documents').waitFor();
     device.free = 8 * 1024 ** 3;
   });
 
@@ -664,6 +669,13 @@ try {
     await until(() => !fs.existsSync(path.join(filesDir, gone.storage_name)), 'its file removed');
     await until(() => docsOf('CT-UP').length === docs.length - 1, 'its record removed from the folder copy');
     assert.deepEqual(Object.fromEntries(fs.readdirSync(filesDir).map((n) => [n, fs.readFileSync(path.join(filesDir, n))])), others);
+    // a delete from the search screen's drawer updates its storage line (8 MB less)
+    await page.goto(`${BASE}#/?q=scan-big`);
+    const was = await page.locator('.phone-space').innerText();
+    const big = await openDrawer(page, 'scan-big');
+    await big.getByRole('button', { name: 'Delete' }).click();
+    await page.locator('.modal').getByRole('button', { name: 'Delete' }).click();
+    await page.waitForFunction((was) => document.querySelector('.phone-space')?.innerText !== was, was);
     await quit();
   });
 

@@ -753,7 +753,7 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
           <button className="btn btn-sm" onClick={changePhoneFolder}>
             Change folder…
           </button>
-          <PhoneSpace />
+          <PhoneSpace version={version} />
           <LockSetting />
         </footer>
       )}

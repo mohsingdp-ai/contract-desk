@@ -6,7 +6,7 @@
 // file I/O) or { path, tree } (permission refused: everything through the system picker's content:// link).
 import { storedName, downloadName, UPLOAD_LIMITS } from '../../core/rules.js';
 
-const cap =typeof window !== 'undefined' ? window.Capacitor : undefined;
+const cap = typeof window !== 'undefined' ? window.Capacitor : undefined;
 export const isPhone = !!cap?.isNativePlatform?.();
 const native = (method, options = {}) => cap.nativePromise('Folder', method, options);
 
@@ -286,7 +286,8 @@ export const LOW_SPACE = 500 * 1024 * 1024;
 export async function space() {
   await ready;
   const [db, docs, { free }] = await Promise.all([stat(folder, DB), call('filePaths'), native('freeSpace', { path: folder.path })]);
-  return { used: db.size + docs.reduce((n, d) => n + d.size_bytes, 0), free };
+  // In picker mode stat can fail and give no size: then the line shows only the free space.
+  return { used: Number.isFinite(db.size) ? db.size + docs.reduce((n, d) => n + d.size_bytes, 0) : null, free };
 }
 
 const count = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;

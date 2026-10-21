@@ -257,15 +257,17 @@ const ACCEPT = '.pdf,.png,.jpg,.jpeg,.gif,.webp,.bmp,.xlsx,.xlsm,.xls,.csv';
 const stem = (name) => name.replace(/\.[^.]+$/, '');
 
 // Phone only: what the data folder uses and what is free, with a clear warning when the phone is nearly full.
-export function PhoneSpace({ warnOnly }) {
+// Checked again whenever `version` changes (a document added or deleted).
+export function PhoneSpace({ warnOnly, version }) {
   const [s, setS] = useState(null);
-  useEffect(() => void space().then(setS, (err) => console.error('Could not check free space', err)), []);
+  useEffect(() => void space().then(setS, (err) => console.error('Could not check free space', err)), [version]);
   if (!s) return null;
   return (
     <>
       {!warnOnly && (
         <span className="phone-space">
-          Uses {fmtSize(s.used)} · {fmtSize(s.free)} free on the phone
+          {s.used !== null && `Uses ${fmtSize(s.used)} · `}
+          {fmtSize(s.free)} free on the phone
         </span>
       )}
       {s.free < LOW_SPACE && (
