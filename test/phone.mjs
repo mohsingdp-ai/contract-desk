@@ -35,10 +35,10 @@ await build({ configFile: path.resolve('vite.config.js'), logLevel: 'error', bui
 // die: 'before' / 'after' makes the next contracts.db replace hang before / after it happens, so the test can "kill" the app there;
 // 'save': the first write of a new folder copy hangs (killed before saving anything).
 // bio: what the fingerprint / face check reports; bioFail: the next fingerprint doesn't match (or is cancelled).
-// writes: pieces written to files/; failWrite: the n-th next write to files/ fails (phone storage full); opened/shared:
+// written: the name of every write; writes: pieces written to files/; failWrite: the n-th next write to files/ fails (phone storage full); opened/shared:
 // what the phone's own apps were handed.
 const device = { access: false, grantOnRequest: true, pick: null, calls: [], die: null, hung: false, free: 8 * 1024 ** 3, bio: { isAvailable: true, deviceIsSecure: true },
-  bioFail: false, exited: false, writes: [], failWrite: 0, opened: null, shared: null, slow: 0 };
+  bioFail: false, exited: false, written: [], writes: [], failWrite: 0, opened: null, shared: null, slow: 0 };
 const hang = () => ((device.hung = true), new Promise(() => {}));
 // Folder (path or picker link) + name -> file on disk.
 function disk(folder, name = '') {
@@ -65,6 +65,7 @@ const plugin = {
     return s ? { exists: true, size: s.size, mtime: Math.floor(s.mtimeMs) } : { exists: false, size: 0, mtime: 0 };
   },
   write: ({ folder, name, data, append }) => {
+    device.written.push(name);
     if (device.die === 'save' && name === 'contracts.db.tmp') return hang(); // killed as the folder copy starts being written
     const bytes = Buffer.from(data, 'base64');
     assert.ok(bytes.length <= 4 * 1024 * 1024, `a ${bytes.length}-byte write: big writes crash the app (decision-1)`);
@@ -1003,12 +1004,15 @@ try {
     };
     for (const [what, bytes] of Object.entries(variants)) {
       device.calls = [];
+      device.written = [];
       const dialog = await restoreFrom(page, bytes);
       await dialog.getByText(/^This backup file is damaged or is not a Contract Desk backup \(.+\)\. Nothing was changed\.$/).waitFor();
       await dialog.locator('.modal-foot').getByRole('button', { name: 'Close' }).click();
       await dialog.waitFor({ state: 'detached' });
       assert.deepEqual(fs.readdirSync(filesDir), [], `${what}: no file left in files/`);
-      if (what.includes('outside')) assert.ok(!device.calls.includes('hashFiles') && !device.calls.includes('write'), 'refused before reading or writing anything');
+      // (The fresh install's own first save of its folder copy, 2 s after start, may land here: contracts.db.tmp.)
+      const restoreWrites = device.written.filter((n) => n !== 'contracts.db.tmp');
+      if (what.includes('outside')) assert.ok(!device.calls.includes('hashFiles') && !restoreWrites.length, `refused before reading or writing anything: ${restoreWrites}`);
       await until(() => !fs.existsSync(path.join(DEFAULT_DIR, '.restore')), `${what}: no restore copy left`);
       assert.deepEqual(contractNos(DEFAULT_DIR), [], what);
       assert.ok(!fs.existsSync(path.join(storage, 'Documents', 'escape.pdf')) && !fs.existsSync(path.join(DEFAULT_DIR, 'escape.pdf')), what);
