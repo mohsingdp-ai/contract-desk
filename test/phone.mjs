@@ -269,7 +269,9 @@ try {
   await check('desktop-only parts are hidden; Excel export and the data folder control are the phone ones', async () => {
     const { page } = app;
     assert.equal(await page.getByText('Connect phone').count(), 0);
-    await page.getByRole('button', { name: 'Export to Excel' }).waitFor(); // a button that opens the share menu, not a download link
+    assert.equal(await page.getByRole('link', { name: /Export to Excel/ }).count(), 0); // no download link: Open and Share buttons
+    await page.getByRole('button', { name: 'Open Excel' }).waitFor();
+    await page.getByRole('button', { name: 'Share Excel export' }).waitFor();
     await page.locator('.phone-folder').getByText(`${PHONE_ROOT}/Documents/Contract Desk`).waitFor();
     await page.getByRole('button', { name: 'Change folder…' }).waitFor();
   });
@@ -977,25 +979,41 @@ try {
     }
   });
 
-  await check('Excel export, filtered and all: built on the phone, in 4 MB pieces, handed to the share menu; same sheets as the desktop', async () => {
+  await check('Excel export, filtered and all: built on the phone, in 4 MB pieces, opened in the spreadsheet app or shared; same sheets as the desktop', async () => {
     const { page } = app;
+    const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const exportDir = disk(`${PHONE_ROOT}/app-cache`, 'export');
     for (const [hash, query, note] of [
       ['#/?q=harbor&category=Packing+List', { scope: 'all', q: 'harbor', category: 'Packing List' }, 'filtered'],
       ['#/', { scope: 'all' }, 'all'],
       ['#/contracts?currency=EUR', { scope: 'contracts', currency: 'EUR' }, 'filtered'],
     ]) {
       await page.goto(`${BASE}${hash}`);
-      device.shared = null;
-      await page.getByRole('button', { name: `Export to Excel ${note}` }).click();
-      await until(() => device.shared, `share menu for ${hash}`, 30_000);
-      const { as, mime, bytes } = device.shared;
-      assert.match(as, /^contract-desk-export-\d{4}-\d\d-\d\d\.xlsx$/);
-      assert.equal(mime, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      const got = await sheets(bytes);
       const want = await sheets(await exportWorkbook(bigRules.exportData(query)).xlsx.writeBuffer());
-      assert.deepEqual(got, want, hash);
-      assert.deepEqual(got.map((s) => s.name), query.scope === 'contracts' ? ['Contracts', 'Documents'] : ['Contracts', 'NOCs', 'Documents']);
-      assert.ok(got.at(-1).rows.length > 2, 'the Documents sheet has rows');
+      const same = async (bytes) => {
+        const got = await sheets(bytes);
+        assert.deepEqual(got, want, hash);
+        assert.deepEqual(got.map((s) => s.name), query.scope === 'contracts' ? ['Contracts', 'Documents'] : ['Contracts', 'NOCs', 'Documents']);
+        assert.ok(got.at(-1).rows.length > 2, 'the Documents sheet has rows');
+      };
+      // Open: "Open with" (like a document's Open XLSX), named as the desktop download; an older export is cleaned up.
+      fs.mkdirSync(exportDir, { recursive: true });
+      fs.writeFileSync(path.join(exportDir, 'contract-desk-export-2020-01-01.xlsx'), 'old');
+      device.opened = null;
+      await page.getByRole('button', { name: `Open Excel ${note}` }).click();
+      await until(() => device.opened, `spreadsheet app for ${hash}`, 30_000);
+      assert.match(device.opened.filePath, /^file:\/\/.*\/app-cache\/export\/contract-desk-export-\d{4}-\d\d-\d\d\.xlsx$/);
+      assert.equal(device.opened.contentType, XLSX);
+      await same(device.opened.bytes);
+      assert.deepEqual(fs.readdirSync(exportDir), [path.basename(device.opened.filePath)], 'only the latest export is kept');
+      // Share: Android's share menu, same file.
+      device.shared = null;
+      await page.getByRole('button', { name: 'Share Excel export' }).click();
+      await until(() => device.shared, `share menu for ${hash}`, 30_000);
+      assert.match(device.shared.as, /^contract-desk-export-\d{4}-\d\d-\d\d\.xlsx$/);
+      assert.equal(device.shared.mime, XLSX);
+      await same(device.shared.bytes);
+      assert.equal(fs.readdirSync(exportDir).length, 1);
     }
   });
 

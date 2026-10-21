@@ -504,24 +504,30 @@ function ExportLink({ scope, filters, label = 'Export to Excel' }) {
   const { sort, ...f } = filters;
   const filtered = Object.keys(f).length > 0;
   const title = filtered ? 'Exports the records matching your current search and filters' : 'Exports every record';
-  const inner = (
+  const inner = (text) => (
     <>
-      <Icon name="sheet" /> {label}
+      <Icon name="sheet" /> {text}
       <span className="btn-note">{filtered ? 'filtered' : 'all'}</span>
     </>
   );
-  // The phone has no server to download from: the app builds the file and opens Android's share menu.
+  // The phone has no server to download from: the app builds the file, then opens it in the phone's spreadsheet app or
+  // hands it to Android's share menu.
   if (isPhone) {
-    const share = () => (setBusy(true), phone.shareExport({ scope, ...f }).catch((err) => alert(err.message)).finally(() => setBusy(false)));
+    const run = (how) => () => (setBusy(true), phone.exportExcel({ scope, ...f }, how).catch((err) => alert(err.message)).finally(() => setBusy(false)));
     return (
-      <button className="btn" title={title} disabled={busy} onClick={share}>
-        {inner}
-      </button>
+      <span className="page-actions">
+        <button className="btn" title={`${title}, and opens it in a spreadsheet app`} disabled={busy} onClick={run('open')}>
+          {inner('Open Excel')}
+        </button>
+        <button className="btn" title={`${title}, through Android's share menu`} aria-label="Share Excel export" disabled={busy} onClick={run('share')}>
+          <Icon name="share" /> Share
+        </button>
+      </span>
     );
   }
   return (
     <a className="btn" href={`/api/export.xlsx${qs({ scope, ...f })}`} title={title}>
-      {inner}
+      {inner(label)}
     </a>
   );
 }

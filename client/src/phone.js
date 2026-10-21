@@ -133,13 +133,14 @@ export async function upload(url, files, meta, onProgress) {
 // keeps its display name; characters Android's shared storage refuses become "_".
 const relPath = (doc) => doc.file_path.replaceAll('\\', '/');
 const outName = (doc) => downloadName(doc).replace(/[\\/:*?"<>|]/g, '_');
-export async function openDoc(doc) {
+async function openWith(filePath, contentType, name) {
   try {
-    await cap.nativePromise('FileOpener', 'open', { filePath: fileUri(folder, relPath(doc)), contentType: doc.mime_type });
+    await cap.nativePromise('FileOpener', 'open', { filePath, contentType });
   } catch (err) {
-    throw new Error(/activity not found/i.test(err.message) ? `No app on this phone opens ${doc.original_name.split('.').pop().toUpperCase()} files` : err.message);
+    throw new Error(/activity not found/i.test(err.message) ? `No app on this phone opens ${name.split('.').pop().toUpperCase()} files` : err.message);
   }
 }
+export const openDoc = (doc) => openWith(fileUri(folder, relPath(doc)), doc.mime_type, doc.original_name);
 export const saveCopy = async (doc) => (await native('saveToDownloads', { folder: where(folder), name: relPath(doc), as: outName(doc), mime: doc.mime_type })).name;
 export const shareDoc = (doc) => native('share', { folder: where(folder), name: relPath(doc), as: outName(doc), mime: doc.mime_type });
 
@@ -332,12 +333,17 @@ export async function chooseFolder() {
 }
 
 // Excel export: the same workbook as the desktop (core/export.js), built here; ExcelJS loads only when asked. Written in
-// 4 MB pieces to the app's cache folder, then handed to Android's share menu (a spreadsheet app, Drive, Files…).
-export async function shareExport(query) {
+// 4 MB pieces to export/ in the app's cache folder (older exports there are removed first, so they don't pile up), then
+// opened in the phone's spreadsheet app ("Open with", as a document's Open) or handed to Android's share menu.
+// Google Sheets is offered only under "Open with", not in the share menu.
+const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+export async function exportExcel(query, how) {
   const [{ exportWorkbook, exportFileName }, data] = await Promise.all([import('../../core/export.js'), call('exportData', { query })]);
   const bytes = new Uint8Array(await exportWorkbook(data).xlsx.writeBuffer());
-  const { path } = await native('cacheFolder');
+  const cache = { path: (await native('cacheFolder')).path };
   const name = exportFileName();
-  await writePieces({ path }, name, bytes);
-  await native('share', { folder: path, name, as: name, mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  for (const old of (await native('list', { folder: cache.path, dir: 'export' })).names) await native('remove', { folder: cache.path, name: `export/${old}` });
+  await writePieces(cache, `export/${name}`, bytes);
+  if (how === 'open') return openWith(fileUri(cache, `export/${name}`), XLSX, name);
+  await native('share', { folder: cache.path, name: `export/${name}`, as: name, mime: XLSX });
 }
