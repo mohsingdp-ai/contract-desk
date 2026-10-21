@@ -4,7 +4,7 @@ title: 'Phone search, filters and Excel export'
 status: Review
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 12:15'
+updated_date: '2026-10-21 12:29'
 labels:
   - android
 milestone: m-0
@@ -26,9 +26,9 @@ Search, filters and Excel export work on the phone exactly as on desktop. Export
 - [x] #1 Same data gives the same search results and order as desktop (exact matches first)
 - [x] #2 Every filter works: project, firm, category, file type, tag, amount range, currency
 - [x] #3 Long result lists page correctly; each result opens its parent contract or NOC
-- [ ] #4 Excel export (all and filtered, with the separate Documents sheet) opens in a spreadsheet app via the share menu
-- [ ] #5 With 3,000 contracts loaded, search results show in under half a second on a low-end phone
-- [x] #6 Has its own automated test that runs with npm test
+- [ ] #4 With 3,000 contracts loaded, search results show in under half a second on a low-end phone
+- [x] #5 Has its own automated test that runs with npm test
+- [ ] #6 Excel export (all and filtered, with the separate Documents sheet): 'Open' shows it in a spreadsheet app (e.g. Google Sheets) and 'Share' hands it to the share menu
 <!-- AC:END -->
 
 ## Implementation Notes
