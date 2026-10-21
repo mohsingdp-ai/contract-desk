@@ -4,7 +4,7 @@ title: 'First APK: app screens and phone database'
 status: Backlog
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 07:11'
+updated_date: '2026-10-21 07:42'
 labels:
   - android
 milestone: m-0
@@ -33,4 +33,6 @@ Add Capacitor, build an Android APK that shows the current screens and saves rec
 - [ ] #8 Document categories: add, rename, reorder, remove (moves its documents first)
 - [ ] #9 Desktop-only parts (phone access, QR, data-folder picker) are hidden on the phone
 - [ ] #10 Has its own automated test that runs with npm test
+- [ ] #11 Safety copy: within a few seconds of every change the database is also saved as a file in the app's own folder; if the WebView storage is wiped, the app restores everything from that copy at start (tested by wiping it on the real phone)
+- [ ] #12 minSdkVersion 29; on a WebView too old for the database, the app says 'Update Android System WebView' instead of failing
 <!-- AC:END -->

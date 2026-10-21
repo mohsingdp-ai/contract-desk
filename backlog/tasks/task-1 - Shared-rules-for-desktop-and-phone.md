@@ -4,7 +4,7 @@ title: Shared rules for desktop and phone
 status: Backlog
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 07:13'
+updated_date: '2026-10-21 07:42'
 labels:
   - android
   - desktop
@@ -25,8 +25,8 @@ Move the server's actions (contracts, NOCs, documents, categories, search, tags,
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 Desktop server calls the shared code for every action except passcode, pairing and data-folder
-- [ ] #2 Shared code works with a database that answers later (async), so any phone database fits
-- [ ] #3 Database and file storage are passed in; desktop and phone each supply their own
-- [ ] #4 npm test and npm run test:e2e pass unchanged
-- [ ] #5 The same acceptance tests run against the shared code with the desktop database, and with the phone database in the way decided in TASK-10
+- [ ] #2 Database and file storage are passed in; desktop and phone each supply their own
+- [ ] #3 npm test and npm run test:e2e pass unchanged
+- [ ] #4 The same acceptance tests run against the shared code with the desktop database, and with the phone database in the way decided in TASK-10
+- [ ] #5 Shared code runs unchanged in the desktop server and inside the phone's database worker (decision-1: synchronous inside, screens talk to it by messages)
 <!-- AC:END -->
