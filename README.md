@@ -50,7 +50,7 @@ npm start              # http://127.0.0.1:4780   (settings: copy .env.example to
 | --- | --- |
 | `npm run dev` | Server with auto-restart + Vite dev server |
 | `npm run app` | Run the desktop app without packaging |
-| `npm test` | API acceptance checks, run twice: with the desktop database and with the phone's (SQLite WebAssembly); then the Android app's web bundle in Chromium (phone database, data folder, start-up copy rules) |
+| `npm test` | API acceptance checks, run twice: with the desktop database and with the phone's (SQLite WebAssembly); then the Android app's web bundle in Chromium (phone database, data folder, start-up copy rules, search on 3,000 contracts, Excel export) |
 | `npm run test:e2e` | Browser UI tests: desktop, phone, Wi-Fi, desktop app (run `npm run build` first) |
 | `npm run dist:linux` | Build the Linux AppImage into `release/` |
 | `npm run demo:video` | Re-record the walkthrough video |

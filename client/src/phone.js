@@ -84,6 +84,12 @@ const base64 = (bytes) =>
     r.readAsDataURL(new Blob([bytes]));
   });
 
+async function writePieces(f, name, bytes) {
+  for (let at = 0; at === 0 || at < bytes.length; at += PIECE) {
+    await native('write', { folder: where(f), name, data: await base64(bytes.subarray(at, at + PIECE)), append: at > 0 });
+  }
+}
+
 function removeFiles(names) {
   for (const n of names) native('remove', { folder: where(folder), name: `files/${n}` }).catch((err) => console.error('Could not remove file', n, err));
 }
@@ -106,9 +112,7 @@ function save() {
     const { bytes, gen } = await call('export');
     const key = await fileKey(bytes);
     phoneState = await call('setSaved', { saved: { ...phoneState.saved, pending: { folder: f, key, gen } } });
-    for (let at = 0; at === 0 || at < bytes.length; at += PIECE) {
-      await native('write', { folder: where(f), name: TMP, data: await base64(bytes.subarray(at, at + PIECE)), append: at > 0 });
-    }
+    await writePieces(f, TMP, bytes);
     await native('rename', { folder: where(f), from: TMP, to: DB });
     phoneState = await call('setSaved', { saved: { folder: f, key, gen } });
   };
@@ -267,4 +271,15 @@ export async function chooseFolder() {
   }
   await attach(f); // no contracts.db there yet: the phone's records are saved into it
   return true;
+}
+
+// Excel export: the same workbook as the desktop (core/export.js), built here; ExcelJS loads only when asked. Written in
+// 4 MB pieces to the app's cache folder, then handed to Android's share menu (a spreadsheet app, Drive, Files…).
+export async function shareExport(query) {
+  const [{ exportWorkbook, exportFileName }, data] = await Promise.all([import('../../core/export.js'), call('exportData', { query })]);
+  const bytes = new Uint8Array(await exportWorkbook(data).xlsx.writeBuffer());
+  const { path } = await native('cacheFolder');
+  const name = exportFileName();
+  await writePieces({ path }, name, bytes);
+  await native('share', { folder: path, name, type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }

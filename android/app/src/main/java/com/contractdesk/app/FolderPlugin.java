@@ -11,6 +11,7 @@ import android.provider.DocumentsContract.Document;
 import android.provider.Settings;
 import android.util.Base64;
 import androidx.activity.result.ActivityResult;
+import androidx.core.content.FileProvider;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -273,6 +274,30 @@ public class FolderPlugin extends Plugin {
             JSObject r = new JSObject();
             r.put("bytes", total);
             call.resolve(r);
+        } catch (Exception e) {
+            call.reject(e.getMessage(), e);
+        }
+    }
+
+    // Where a file is written before it is shared (an Excel export): the app's cache folder. No permission needed,
+    // and Android clears it by itself.
+    @PluginMethod
+    public void cacheFolder(PluginCall call) {
+        JSObject r = new JSObject();
+        r.put("path", getContext().getCacheDir().getPath());
+        call.resolve(r);
+    }
+
+    // Hands a file in the cache folder to Android's share menu (a FileProvider link the chosen app may read).
+    @PluginMethod
+    public void share(PluginCall call) {
+        try {
+            File f = new File(call.getString("folder"), call.getString("name"));
+            Uri uri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", f);
+            Intent send = new Intent(Intent.ACTION_SEND).setType(call.getString("type")).putExtra(Intent.EXTRA_STREAM, uri);
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            getActivity().startActivity(Intent.createChooser(send, f.getName()));
+            call.resolve();
         } catch (Exception e) {
             call.reject(e.getMessage(), e);
         }

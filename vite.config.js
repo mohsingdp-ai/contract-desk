@@ -6,7 +6,8 @@ export default defineConfig(({ mode }) => {
   return {
     root: 'client',
     plugins: [react()],
-    build: { outDir: '../dist', emptyOutDir: true },
+    // ExcelJS (the phone's Excel export, ~940 kB) is its own chunk, loaded only when exporting.
+    build: { outDir: '../dist', emptyOutDir: true, chunkSizeWarningLimit: 1000 },
     // Phone database worker (sqlite-wasm): settings proven in decision-1.
     worker: { format: 'es' },
     optimizeDeps: { exclude: ['@sqlite.org/sqlite-wasm'] },
