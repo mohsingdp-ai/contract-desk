@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, qs, fmtAmount, fmtDate, isPhone } from './api.js';
+import { api, qs, fmtAmount, fmtDate, isPhone, checkRestore, applyRestore, cancelRestore } from './api.js';
+import { REMIND_AFTER_DAYS } from '../../core/backup.js';
 import * as phone from './phone.js';
 import * as phoneApp from './phone-app.js';
 import { Icon, Hl, Modal, Confirm, Field, Pager, DocRow, UploadDialog, DocDrawer, DeleteDocConfirm, PhoneSpace } from './ui.jsx';
@@ -76,6 +77,9 @@ function Desk() {
   const { data: meta } = useData('/api/meta', version); // categories can change while the app is open
   const { data: facets } = useData('/api/facets', version);
   const [needPasscode, setNeedPasscode] = useState(false);
+  const [remind, setRemind] = useState(true); // the backup reminder, until a backup is started
+  // The desktop's backup is a download, which the page can't follow: refresh shortly after, and stop reminding meanwhile.
+  const onBackup = useCallback(() => (setRemind(false), setTimeout(bump, 1500)), [bump]);
   const [phoneStatus, setPhoneStatus] = useState(phone.status);
   useEffect(() => {
     if (!isPhone) return;
@@ -115,6 +119,8 @@ function Desk() {
     facets,
     version,
     bump,
+    remind,
+    onBackup,
     tagNames: facets.tags.map((t) => t.name),
     openDoc: (id) => go(route.path, { ...params, doc: id }),
     openParent: (p) => go(`/${p.type === 'contract' ? 'contracts' : 'nocs'}/${p.id}`),
@@ -123,7 +129,7 @@ function Desk() {
 
   return (
     <div className="shell">
-      <Rail section={section} facets={facets} meta={meta} />
+      <Rail section={section} facets={facets} meta={meta} onBackup={onBackup} />
       <main className="main" key={route.path}>
         {!section && <SearchPage {...ctx} />}
         {section === 'contracts' && !id && <ContractsPage {...ctx} />}
@@ -363,10 +369,133 @@ function ThemeSwitch() {
   );
 }
 
+// ---------- backup and restore (format: core/backup.js) ----------
+
+// Desktop: a download (the desktop app asks where to save it). Phone: built in pieces, saved to Downloads, then the share
+// menu opens so it can go to Drive, email or a computer.
+function BackupButton({ onBackup, className, label = 'Back up…' }) {
+  const [busy, setBusy] = useState(null);
+  const [saved, setSaved] = useState('');
+  if (!isPhone)
+    return (
+      <a className={className} href="/api/backup" download onClick={onBackup}>
+        {label}
+      </a>
+    );
+  const run = async () => {
+    setBusy(0);
+    setSaved('');
+    try {
+      setSaved(await phone.backup(setBusy));
+      onBackup();
+    } catch (err) {
+      alert(`The backup could not be made: ${err.message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <>
+      <button className={className} disabled={busy !== null} onClick={run}>
+        {busy === null ? label : `Backing up… ${Math.round(busy * 100)}%`}
+      </button>
+      {saved && <span className="phone-space">Backup saved in Downloads as {saved}</span>}
+    </>
+  );
+}
+
+function RestoreButton({ className, label = 'Restore…' }) {
+  const [file, setFile] = useState(null);
+  const pick = useRef();
+  return (
+    <>
+      <button className={className} onClick={() => pick.current.click()}>
+        {label}
+      </button>
+      <input ref={pick} type="file" accept=".tar,application/x-tar" hidden aria-label="Backup file" onChange={(e) => (setFile(e.target.files[0] || null), (e.target.value = ''))} />
+      {file && <RestoreDialog file={file} onClose={() => setFile(null)} />}
+    </>
+  );
+}
+
+const countsLine = (c) => `${c.contracts.toLocaleString()} contracts, ${c.nocs.toLocaleString()} NOCs, ${c.documents.toLocaleString()} documents`;
+
+// Checks the whole file first (nothing changes yet), then says what would be replaced and asks.
+function RestoreDialog({ file, onClose }) {
+  const [s, setS] = useState({ step: 'checking' });
+  useEffect(() => {
+    checkRestore(file).then((r) => setS({ step: 'ready', ...r }), (err) => setS({ step: 'error', error: err.message }));
+  }, [file]);
+  const close = () => {
+    if (s.step === 'applying') return;
+    if (s.step === 'ready') cancelRestore();
+    onClose();
+  };
+  const apply = async () => {
+    setS((v) => ({ ...v, step: 'applying' }));
+    try {
+      await applyRestore();
+      location.reload();
+    } catch (err) {
+      setS({ step: 'error', error: err.message });
+    }
+  };
+  return (
+    <Modal title="Restore from a backup" onClose={close} tone="danger">
+      <div className="modal-body confirm-body">
+        {s.step === 'checking' && <p>Checking every record and file in {file.name}…</p>}
+        {s.step === 'error' && <p className="form-error">{s.error}</p>}
+        {(s.step === 'ready' || s.step === 'applying') && (
+          <>
+            <p>
+              <strong>Everything now in Contract Desk is replaced</strong> by this backup, made {fmtDate(s.made)} on {s.from === 'phone' ? 'a phone' : 'a computer'}.
+              Records and files that are not in the backup are deleted.
+            </p>
+            <ul className="confirm-list">
+              <li>
+                Now: <span className="mono">{countsLine(s.now)}</span>
+              </li>
+              <li>
+                After restoring: <span className="mono">{countsLine(s.backup)}</span>
+              </li>
+            </ul>
+          </>
+        )}
+      </div>
+      <footer className="modal-foot">
+        <button className="btn" onClick={close} disabled={s.step === 'applying'} autoFocus>
+          {s.step === 'error' ? 'Close' : 'Keep current records'}
+        </button>
+        {s.step !== 'error' && (
+          <button className="btn btn-danger" onClick={apply} disabled={s.step !== 'ready'}>
+            {s.step === 'applying' ? 'Restoring…' : 'Replace with backup'}
+          </button>
+        )}
+      </footer>
+    </Modal>
+  );
+}
+
+// On the search page (the front door) when there are records and no backup in the last two weeks.
+function BackupReminder({ meta, facets, remind, onBackup }) {
+  const { contracts, nocs, documents } = facets.counts;
+  const days = meta.lastBackup ? Math.floor((Date.now() - Date.parse(meta.lastBackup)) / 864e5) : null;
+  if (!remind || !(contracts + nocs + documents) || (days !== null && days < REMIND_AFTER_DAYS)) return null;
+  return (
+    <p className="backup-reminder" role="status">
+      <span>
+        {days === null ? 'No backup yet.' : `Last backup ${days} days ago.`} Keep a copy somewhere else, so your records survive a lost or broken{' '}
+        {isPhone ? 'phone' : 'computer'}.
+      </span>
+      <BackupButton className="btn btn-sm" label="Back up now" onBackup={onBackup} />
+    </p>
+  );
+}
+
 // Phone: switch the data folder with the system folder picker (decision-2), then reload the desk from it.
 const changePhoneFolder = () => phone.chooseFolder().then((changed) => changed && location.reload(), (err) => alert(err.message));
 
-function Rail({ section, facets, meta }) {
+function Rail({ section, facets, meta, onBackup }) {
   const n = (v) => v.toLocaleString();
   return (
     <aside className="rail">
@@ -415,6 +544,11 @@ function Rail({ section, facets, meta }) {
             <button onClick={changePhoneFolder}>Change…</button>
           </span>
         )}
+        <span className="kicker">Backup</span>
+        <span className="rail-folder">
+          <BackupButton onBackup={onBackup} />
+          <RestoreButton />
+        </span>
         <span className="rail-local">{meta.lan ? 'Wi-Fi access on · passcode' : 'Local only · offline'}</span>
       </div>
     </aside>
@@ -610,7 +744,7 @@ function Empty({ children }) {
 
 // ---------- search (front door) ----------
 
-function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
+function SearchPage({ route, go, meta, facets, version, openDoc, openParent, remind, onBackup }) {
   const { params } = route;
   const filters = pick(params);
   const set = (p) => go('/', { ...params, ...p, cp: '', np: '', dp: '' }, { replace: true });
@@ -668,6 +802,7 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
 
   return (
     <div className="page page-search">
+      <BackupReminder meta={meta} facets={facets} remind={remind} onBackup={onBackup} />
       <div className="search-hero">
         <label className="sr-only" htmlFor="q">
           Search everything filed
@@ -707,6 +842,7 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
             <a className="btn" href="#/nocs?new=1">
               <Icon name="plus" /> New NOC
             </a>
+            <RestoreButton className="btn" label="Restore a backup…" />
           </div>
         </Empty>
       ) : (
@@ -754,6 +890,10 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
             Change folder…
           </button>
           <PhoneSpace version={version} />
+          <span className="row-gap">
+            <BackupButton className="btn btn-sm" onBackup={onBackup} />
+            <RestoreButton className="btn btn-sm" />
+          </span>
           <LockSetting />
         </footer>
       )}

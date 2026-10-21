@@ -2,6 +2,8 @@ import express from 'express';
 import multer from 'multer';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pipeline, finished } from 'node:stream/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +12,7 @@ import { openDb, openWasmDb } from './db.js';
 import { createRules, errorReply, downloadName, storedName, UPLOAD_LIMITS, HttpError } from '../core/rules.js';
 import { exportWorkbook, exportFileName } from '../core/export.js';
 import { ROUTES } from '../core/routes.js';
+import { backupFileName, backupManifest, COUNTS_SQL, damaged, readBackup, tarEnd, tarHeader, tarPad } from '../core/backup.js';
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || 'data');
 const PORT = Number(process.env.PORT || 4780);
@@ -23,9 +26,6 @@ const HOST = LAN_PASSCODE ? '0.0.0.0' : '127.0.0.1';
 const FILES_DIR = path.join(DATA_DIR, 'files');
 const DIST_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 
-// DB_ENGINE=wasm runs the phone's SQLite build instead, so the tests can check the shared rules on both.
-const db = process.env.DB_ENGINE === 'wasm' ? await openWasmDb(DATA_DIR) : openDb(DATA_DIR);
-
 const removeFiles = (names) => {
   for (const n of names) {
     try {
@@ -37,14 +37,21 @@ const removeFiles = (names) => {
   }
 };
 // Business rules are shared with the phone app (core/); this file only adds what is desktop-specific.
-const rules = createRules({
-  db,
-  files: {
-    remove: removeFiles,
-    list: () => fs.readdirSync(FILES_DIR),
-    exists: (filePath) => fs.existsSync(path.join(DATA_DIR, filePath)),
-  },
-});
+// Both are swapped when a backup is restored.
+let db, rules;
+async function openRecords() {
+  // DB_ENGINE=wasm runs the phone's SQLite build instead, so the tests can check the shared rules on both.
+  db = process.env.DB_ENGINE === 'wasm' ? await openWasmDb(DATA_DIR) : openDb(DATA_DIR);
+  rules = createRules({
+    db,
+    files: {
+      remove: removeFiles,
+      list: () => fs.readdirSync(FILES_DIR),
+      exists: (filePath) => fs.existsSync(path.join(DATA_DIR, filePath)),
+    },
+  });
+}
+await openRecords();
 const str = (v) => (typeof v === 'string' ? v.trim() : v == null ? '' : String(v).trim());
 
 // ---------- app ----------
@@ -143,8 +150,8 @@ app.use('/api', (req, res, next) => {
 });
 
 app.get('/api/meta', (req, res) => {
-  const { categories, fileTypes } = rules.meta();
-  res.json({ categories, dataDir: DATA_DIR, fileTypes, lan: !!LAN_PASSCODE, onThisComputer: isLoopback(req) });
+  const { categories, fileTypes, lastBackup } = rules.meta();
+  res.json({ categories, dataDir: DATA_DIR, fileTypes, lastBackup, lan: !!LAN_PASSCODE, onThisComputer: isLoopback(req) });
 });
 
 // Contracts, NOCs, documents, categories and facets: the route table is shared with the phone app.
@@ -193,6 +200,118 @@ app.get('/api/export.xlsx', async (req, res) => {
   res.end();
 });
 
+// ---------- backup and restore (one format with the phone: core/backup.js) ----------
+
+const DB_FILE = path.join(DATA_DIR, 'contracts.db');
+const STAGING = path.join(DATA_DIR, '.restore'); // a restore being checked; left over only by a crash before the switch
+fs.rmSync(STAGING, { recursive: true, force: true });
+let restoring = null; // the checked backup's manifest, waiting for the owner's yes
+const APP_VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url))).version;
+async function sha256File(file) {
+  const h = createHash('sha256');
+  for await (const chunk of fs.createReadStream(file)) h.update(chunk);
+  return h.digest('hex');
+}
+
+// Streamed as it is made: nothing is held in memory but one piece of one file.
+app.get('/api/backup', async (req, res) => {
+  const snap = path.join(os.tmpdir(), `contract-desk-backup-${process.pid}-${Date.now()}.db`);
+  try {
+    // One consistent copy of the database, in rollback mode (VACUUM INTO writes it so). The wasm test engine already
+    // keeps contracts.db complete after every change.
+    if (process.env.DB_ENGINE === 'wasm') fs.copyFileSync(DB_FILE, snap);
+    else db.exec(`VACUUM INTO '${snap.replaceAll("'", "''")}'`);
+    const copy = new DatabaseSync(snap, { readOnly: true });
+    const counts = copy.prepare(COUNTS_SQL).get();
+    const docs = copy.prepare('SELECT storage_name, file_path FROM documents').all();
+    copy.close();
+    // A document whose file is already missing (the startup check warns about those) is left out rather than stopping the backup.
+    const entries = [['contracts.db', snap], ...docs.map((d) => [`files/${d.storage_name}`, path.join(DATA_DIR, d.file_path)]).filter(([, f]) => fs.existsSync(f))];
+    const files = {};
+    for (const [name, file] of entries) files[name] = { size: fs.statSync(file).size, sha256: await sha256File(file) };
+    const manifest = Buffer.from(backupManifest({ appVersion: APP_VERSION, from: 'desktop', counts, files }));
+    res.attachment(backupFileName());
+    res.type('application/x-tar');
+    await pipeline(async function* () {
+      yield tarHeader('manifest.json', manifest.length);
+      yield manifest;
+      yield tarPad(manifest.length);
+      for (const [name, file] of entries) {
+        yield tarHeader(name, files[name].size);
+        yield* fs.createReadStream(file);
+        yield tarPad(files[name].size);
+      }
+      yield tarEnd();
+    }, res);
+    rules.noteBackup(new Date().toISOString());
+  } finally {
+    fs.rmSync(snap, { force: true });
+  }
+});
+
+// Restore, step 1: the backup is streamed into .restore/ and checked as a whole (every size and SHA-256, the database's
+// integrity) before anything is touched. Answers what would be replaced.
+app.post('/api/restore', async (req, res) => {
+  restoring = null;
+  fs.rmSync(STAGING, { recursive: true, force: true });
+  fs.mkdirSync(path.join(STAGING, 'files'), { recursive: true });
+  let out = null; // the entry being written
+  try {
+    const manifest = await readBackup(req.iterator({ destroyOnReturn: false }), (name, size, sha256) => {
+      out = fs.openSync(path.join(STAGING, name), 'w');
+      const hash = createHash('sha256');
+      return (piece) => {
+        if (piece) return hash.update(piece), fs.writeSync(out, piece);
+        fs.closeSync(out);
+        out = null;
+        if (hash.digest('hex') !== sha256) throw damaged(`${name} does not match`);
+      };
+    });
+    // A desktop database is in WAL mode; switch the copy's header to rollback mode so it opens on its own (no -wal file).
+    const staged = path.join(STAGING, 'contracts.db');
+    const fd = fs.openSync(staged, 'r+');
+    fs.writeSync(fd, Buffer.from([1, 1]), 0, 2, 18);
+    fs.closeSync(fd);
+    let backup;
+    try {
+      const copy = new DatabaseSync(staged, { readOnly: true });
+      if (copy.prepare('PRAGMA integrity_check').get().integrity_check === 'ok') backup = copy.prepare(COUNTS_SQL).get();
+      copy.close();
+    } catch {}
+    if (!backup) throw damaged('its database is damaged');
+    restoring = manifest;
+    res.json({ made: manifest.made, from: manifest.from, now: rules.facets().counts, backup });
+  } catch (err) {
+    if (out !== null) fs.closeSync(out);
+    fs.rmSync(STAGING, { recursive: true, force: true });
+    if (!req.readableEnded) await finished(req.resume()).catch(() => {}); // read the rest, so the browser gets the answer
+    throw err;
+  }
+});
+
+// Step 2, after the owner said yes. The files go in first: their names are unique per document, so the current records'
+// files stay as they are. Then the database is swapped in one rename. A crash before that leaves the current records;
+// the extra files are tidied away at the next start.
+app.post('/api/restore/apply', async (req, res) => {
+  if (!restoring || !fs.existsSync(path.join(STAGING, 'contracts.db'))) throw new HttpError(409, 'Choose the backup file again.');
+  for (const n of fs.readdirSync(path.join(STAGING, 'files'))) fs.renameSync(path.join(STAGING, 'files', n), path.join(FILES_DIR, n));
+  db.close(); // merges and removes the WAL; a leftover one must not be applied to the restored file
+  for (const f of [`${DB_FILE}-wal`, `${DB_FILE}-shm`]) fs.rmSync(f, { force: true });
+  fs.renameSync(path.join(STAGING, 'contracts.db'), DB_FILE);
+  await openRecords();
+  rules.noteBackup(restoring.made); // what is in the app now was backed up then
+  restoring = null;
+  fs.rmSync(STAGING, { recursive: true, force: true });
+  rules.sweepOrphans(); // files only the replaced records had
+  res.json(rules.facets().counts);
+});
+
+app.delete('/api/restore', (req, res) => {
+  restoring = null;
+  fs.rmSync(STAGING, { recursive: true, force: true });
+  res.json({ ok: true });
+});
+
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 // Built frontend
@@ -200,6 +319,7 @@ app.use(express.static(DIST_DIR));
 app.get('/', (req, res) => res.sendFile(path.join(DIST_DIR, 'index.html'), (err) => err && res.status(404).send('Frontend not built. Run: npm run build')));
 
 app.use((err, req, res, next) => {
+  if (res.headersSent) return res.destroy(); // e.g. a backup that failed while being sent
   const { status, message } = err instanceof multer.MulterError ? { status: 400, message: err.message } : errorReply(err);
   if (status >= 500) console.error(err);
   res.status(status).json({ error: message });

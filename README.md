@@ -31,8 +31,12 @@ Windows asks once to allow it on private networks: click **Allow**. On Linux wit
 - **Document categories** (Bank Payment Documents, Commercial Invoice, …) are yours to change: sidebar → **Document categories**
   to add, rename, reorder or remove them. Removing one moves its documents to another category first.
 - **Deleting** a contract or NOC also deletes its documents and their files. The app always asks first.
+- **Back up** (sidebar → Backup, or the reminder after 14 days without one) saves every record and file in one `.tar` file.
+  Keep it somewhere else (a USB drive, cloud storage). **Restore…** checks the whole file first, says what it will replace,
+  and asks. A backup from the phone app restores on the computer and the other way round. On the phone, the backup is saved
+  to Downloads and the share menu opens, so you can send it to Drive, email or a computer.
 - **Menu → File:** start with the computer.
-- Not in this version: searching inside files (OCR), backup/restore.
+- Not in this version: searching inside files (OCR).
 
 ---
 
@@ -50,7 +54,7 @@ npm start              # http://127.0.0.1:4780   (settings: copy .env.example to
 | --- | --- |
 | `npm run dev` | Server with auto-restart + Vite dev server |
 | `npm run app` | Run the desktop app without packaging |
-| `npm test` | API acceptance checks, run twice: with the desktop database and with the phone's (SQLite WebAssembly); then the Android app's web bundle in Chromium (phone database, data folder, start-up copy rules, search on 3,000 contracts, Excel export, uploads and files) |
+| `npm test` | API acceptance checks, run twice: with the desktop database and with the phone's (SQLite WebAssembly); then the Android app's web bundle in Chromium (phone database, data folder, start-up copy rules, search on 3,000 contracts, Excel export, uploads and files, backup and restore) |
 | `npm run test:e2e` | Browser UI tests: desktop, phone, Wi-Fi, desktop app (run `npm run build` first) |
 | `npm run dist:linux` | Build the Linux AppImage into `release/` |
 | `npm run demo:video` | Re-record the walkthrough video |

@@ -1,4 +1,6 @@
-import { isPhone, request, upload } from './phone.js';
+import * as phone from './phone.js';
+
+const { isPhone, request, upload } = phone;
 
 export { isPhone };
 
@@ -37,6 +39,18 @@ export function uploadFiles(url, files, meta, onProgress) {
     xhr.send(fd);
   });
 }
+
+// Restore from a backup file: check it (answers what would be replaced), then apply or cancel. On the desktop the file
+// streams to this computer's server; the phone reads it in pieces itself.
+export async function checkRestore(file) {
+  if (isPhone) return phone.checkRestore(file);
+  const res = await fetch('/api/restore', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Restore failed (${res.status})`);
+  return data;
+}
+export const applyRestore = () => (isPhone ? phone.applyRestore() : api('POST', '/api/restore/apply'));
+export const cancelRestore = () => (isPhone ? phone.cancelRestore() : api('DELETE', '/api/restore').catch(() => {}));
 
 export const qs = (obj) => {
   const p = new URLSearchParams();

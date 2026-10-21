@@ -34,6 +34,7 @@ export async function openWasmDb(dataDir) {
     fs.renameSync(file + '.tmp', file);
   };
   const db = wrapWasmDb(sqlite3, wdb, save);
+  db.close = () => wdb.close(); // before a restore swaps contracts.db
   setupDb(db);
   return db;
 }

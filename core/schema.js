@@ -95,6 +95,9 @@ CREATE TABLE IF NOT EXISTS document_tags (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS document_tags_tag ON document_tags (tag_id, document_id);
 
+-- Small facts kept with the records, so they travel with a copied folder or a backup: 'last_backup' (ISO time).
+CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
 -- Substring search index over each document's names, Reference No. and tags (trigram = any 3+ characters).
 -- Triggers keep it in step with documents and document_tags, including cascade deletes.
 CREATE VIRTUAL TABLE IF NOT EXISTS doc_search USING fts5(display_name, original_name, reference_no, tags, tokenize = 'trigram');
