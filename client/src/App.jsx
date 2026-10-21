@@ -404,9 +404,11 @@ function BackupButton({ onBackup, className, label = 'Back up…' }) {
   );
 }
 
-function RestoreButton({ className, label = 'Restore…' }) {
+// Only on the computer running Contract Desk (or in the phone app): a restore replaces everything.
+function RestoreButton({ meta, className, label = 'Restore…' }) {
   const [file, setFile] = useState(null);
   const pick = useRef();
+  if (!isPhone && !meta.onThisComputer) return null;
   return (
     <>
       <button className={className} onClick={() => pick.current.click()}>
@@ -547,7 +549,7 @@ function Rail({ section, facets, meta, onBackup }) {
         <span className="kicker">Backup</span>
         <span className="rail-folder">
           <BackupButton onBackup={onBackup} />
-          <RestoreButton />
+          <RestoreButton meta={meta} />
         </span>
         <span className="rail-local">{meta.lan ? 'Wi-Fi access on · passcode' : 'Local only · offline'}</span>
       </div>
@@ -842,7 +844,7 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent, rem
             <a className="btn" href="#/nocs?new=1">
               <Icon name="plus" /> New NOC
             </a>
-            <RestoreButton className="btn" label="Restore a backup…" />
+            <RestoreButton meta={meta} className="btn" label="Restore a backup…" />
           </div>
         </Empty>
       ) : (
@@ -892,7 +894,7 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent, rem
           <PhoneSpace version={version} />
           <span className="row-gap">
             <BackupButton className="btn btn-sm" onBackup={onBackup} />
-            <RestoreButton className="btn btn-sm" />
+            <RestoreButton meta={meta} className="btn btn-sm" />
           </span>
           <LockSetting />
         </footer>

@@ -323,10 +323,13 @@ else {
     process.env.DATA_DIR = s.dataDir;
     process.env.PORT = String(PORT);
     process.env.LAN_PASSCODE = s.phoneAccess ? s.passcode : '';
+    process.env.BACKUP_NOTED_BY_APP = '1'; // see will-download below
 
     let lan = [];
+    let server;
     try {
-      ({ lanAddresses: lan } = await (await import('../server/index.js')).ready);
+      server = await import('../server/index.js');
+      ({ lanAddresses: lan } = await server.ready);
     } catch (err) {
       dialog.showErrorBox(
         'Contract Desk could not start',
@@ -353,6 +356,10 @@ else {
     });
     ipcMain.handle('data-folder:open', (e) => e.sender === win.webContents && shell.openPath(s.dataDir));
     ipcMain.handle('data-folder:choose', (e) => e.sender === win.webContents && changeDataFolder(win, s));
+    // A backup counts (for the reminder) only once its file is really saved: not when the save dialog is cancelled.
+    win.webContents.session.on('will-download', (e, item) => {
+      if (new URL(item.getURL()).pathname === '/api/backup') item.once('done', (e, state) => state === 'completed' && server.noteBackup());
+    });
     // "Open in new tab" and other new windows go to the system browser (same local address, no passcode).
     win.webContents.setWindowOpenHandler(({ url }) => {
       if (url.startsWith(`http://127.0.0.1:${PORT}/`)) shell.openExternal(url);

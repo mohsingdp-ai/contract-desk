@@ -181,3 +181,33 @@ test('a move that cannot finish leaves everything as it was', async () => {
   expect(contractCount(path.join(root, 'moved-here'))).toBe(1); // nothing overwritten
   await app.close();
 });
+
+test('a backup counts for the reminder only once its file is saved, not when the save dialog is cancelled', async () => {
+  const app = await launch();
+  const win = await sized(app);
+  const lastBackup = async () => (await (await fetch(`http://127.0.0.1:${PORT}/api/meta`)).json()).lastBackup;
+  // Stands in for the owner's answer to the save dialog: cancel, or save to `file`.
+  const answerSave = (file) =>
+    app.evaluate(({ session }, file) => {
+      global.__download = null;
+      session.defaultSession.once('will-download', (e, item) => {
+        item.once('done', (e, state) => (global.__download = state));
+        file ? item.setSavePath(file) : item.cancel();
+      });
+    }, file);
+  const finished = () => expect.poll(() => app.evaluate(() => global.__download)).not.toBeNull();
+  const before = await lastBackup();
+  await answerSave(null);
+  await win.locator('.rail-foot').getByRole('link', { name: 'Back up…' }).click();
+  await finished();
+  expect(await app.evaluate(() => global.__download)).toBe('cancelled');
+  expect(await lastBackup()).toBe(before);
+  const file = path.join(root, 'saved-backup.tar');
+  await answerSave(file);
+  await win.locator('.rail-foot').getByRole('link', { name: 'Back up…' }).click();
+  await finished();
+  expect(await app.evaluate(() => global.__download)).toBe('completed');
+  expect(fs.statSync(file).size).toBeGreaterThan(1024);
+  await expect.poll(lastBackup).not.toBe(before);
+  await app.close();
+});

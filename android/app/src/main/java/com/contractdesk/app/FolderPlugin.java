@@ -209,8 +209,9 @@ public class FolderPlugin extends Plugin {
         }
     }
 
-    // Replaces "to" with "from". Plain paths: one atomic rename. Picker links can't rename over a file, so the old
-    // one is deleted first; a crash in between leaves only the .tmp, which start-up recovers.
+    // Replaces "to" with "from" (also into another sub-folder, e.g. a restored file from ".restore/x" to "files/x").
+    // Plain paths: one atomic rename. Picker links can't rename over a file, so the old one is deleted first; a crash in
+    // between leaves only the .tmp, which start-up recovers.
     @PluginMethod
     public void rename(PluginCall call) {
         String folder = call.getString("folder");
@@ -219,7 +220,15 @@ public class FolderPlugin extends Plugin {
         try {
             if (isTree(folder)) {
                 if (treeExists(folder, to)) DocumentsContract.deleteDocument(cr(), doc(folder, to));
-                if (DocumentsContract.renameDocument(cr(), doc(folder, from), to) == null) throw new IOException("Could not rename " + from);
+                Uri src = doc(folder, from);
+                if (!dirOf(from).equals(dirOf(to))) {
+                    src = DocumentsContract.moveDocument(cr(), src, doc(folder, dirOf(from)), doc(folder, dirOf(to)));
+                    if (src == null) throw new IOException("Could not move " + from);
+                }
+                String name = to.substring(to.lastIndexOf('/') + 1);
+                if (!from.endsWith("/" + name) && !from.equals(name) && DocumentsContract.renameDocument(cr(), src, name) == null) {
+                    throw new IOException("Could not rename " + from);
+                }
             } else if (!new File(folder, from).renameTo(new File(folder, to))) {
                 throw new IOException("Could not rename " + from + " to " + to);
             }
@@ -229,6 +238,12 @@ public class FolderPlugin extends Plugin {
         }
     }
 
+    private static String dirOf(String name) {
+        int slash = name.lastIndexOf('/');
+        return slash < 0 ? "" : name.substring(0, slash);
+    }
+
+    // A file, or a folder with everything in it (a picker link's folder is deleted with its contents by Android).
     @PluginMethod
     public void remove(PluginCall call) {
         String folder = call.getString("folder");
@@ -238,6 +253,8 @@ public class FolderPlugin extends Plugin {
                 if (treeExists(folder, name)) DocumentsContract.deleteDocument(cr(), doc(folder, name));
             } else {
                 File f = new File(folder, name);
+                File[] inside = f.listFiles();
+                if (inside != null) for (File c : inside) c.delete(); // one level: what the app puts in a folder it removes
                 if (f.exists() && !f.delete()) throw new IOException("Could not delete " + name);
             }
             call.resolve();

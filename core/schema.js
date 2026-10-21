@@ -131,6 +131,8 @@ export function setupDb(db) {
   }
   migrateFixedCategories(db);
   db.exec(SCHEMA);
+  // Stored paths use / on every device (a Windows desktop used to store files\name); char(92) is the backslash.
+  db.exec(`UPDATE documents SET file_path = replace(file_path, char(92), '/') WHERE instr(file_path, char(92))`);
   // Build (or repair) the search index for databases created before it existed.
   const { docs, indexed } = db.prepare('SELECT (SELECT count(*) FROM documents) AS docs, (SELECT count(*) FROM doc_search) AS indexed').get();
   if (docs !== indexed) {

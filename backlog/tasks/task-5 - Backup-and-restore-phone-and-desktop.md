@@ -4,7 +4,7 @@ title: Backup and restore (phone and desktop)
 status: Review
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 11:40'
+updated_date: '2026-10-21 11:55'
 labels:
   - android
   - desktop
@@ -38,8 +38,9 @@ Export every record and file to one backup file, and restore it. Needed before r
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-One backup format for desktop and phone: a plain .tar (manifest.json first with app/format/version/counts and size + SHA-256 of every entry; contracts.db as a consistent rollback-mode copy; files/<storage name>). Shared code in core/backup.js (tar writer, streaming reader that enforces the manifest, JS SHA-256 for the phone).
-Desktop: sidebar Backup → Back up… (streamed download, nothing held in memory) and Restore… (file streamed to the server, staged in <data>/.restore, every hash + integrity_check checked; confirmation shows counts now/after; apply moves files then swaps contracts.db in one rename and reopens). Phone: Back up… builds the archive in the app cache (DB + headers over the bridge in 4 MB pieces; documents copied natively in batches via new Folder.append/hashFiles), saves it to Downloads and opens the share sheet (moved, not copied). Restore… reads the picked file in 4 MB pieces, hashes everything in-stream, writes only new files, imports + saves the folder copy only after the yes; a failed check removes the files it wrote. Last backup time is kept in the DB (app_state); reminder on the search page when there are records and no backup for 14 days. Restored data counts as backed up at the backup's time.
-Tests: acceptance (both engines) +4 checks incl. 3,000 contracts / 10,000 files / 463 MB backup+restore with server peak ~207 MB; phone +6 checks (backup, keep/replace confirmation, damaged variants, wipe+restore, phone↔desktop both ways incl. WAL-mode DB, 3,000 contracts with 2×64 MB files: 105 bridge calls, page heap peak ~27 MB); e2e +2 (sidebar backup download, restore with confirmation, damaged file, 14-day reminder). APK builds.
-Pending real phone: #1, #2, #3, #7, #9 (new native methods hashFiles/append/share move, Android file picker for .tar, Downloads + share sheet, memory on device).
+One backup format for desktop and phone: a plain .tar (manifest.json first with app/format/version/counts and size + SHA-256 of every entry; contracts.db as a consistent rollback-mode copy; files/<storage name>, always '/'). Shared code in core/backup.js (tar writer, streaming reader that enforces the manifest, JS SHA-256 for the phone).
+Restore never touches data in use before the backup is fully checked AND the owner says yes: desktop stages in <data>/.restore (all hashes + integrity_check), phone stages document files in <data>/.restore/ (the database stays in memory); on any failure or 'Keep current records' only .restore/ is removed. After the yes: files move into files/ (native rename now moves between sub-folders, also in picker mode via moveDocument), then the database is swapped (desktop: one rename + reopen; phone: import + .tmp/rename folder save). Stored paths are normalised to '/' on every open (a Windows desktop's files\name), and desktop uploads now store '/'. Restore is allowed only from the computer itself (403 for Wi-Fi phones; the button is hidden there); backup download over Wi-Fi stays.
+Desktop: sidebar Backup -> Back up… (streamed download) and Restore…. In the desktop app the last-backup time is recorded only when Electron reports the download 'completed' (cancelled save dialog = not recorded); in a plain browser it is recorded when the response finished streaming. Phone: Back up… builds the archive in the cache (documents copied natively in batches via Folder.append/hashFiles), saves it to Downloads, opens the share sheet. Reminder on the search page when there are records and no backup for 14 days.
+Tests: acceptance 26 (node) / 25 (wasm) incl. 463 MB backup+restore at ~192 MB server peak, Windows-path restore, changed live file kept on damaged restore, Wi-Fi restore refused; phone 48 incl. changed live file untouched on damaged/kept restore and replaced after yes, Windows (WAL + backslash) backup restored on the phone; e2e 42 incl. Electron cancel vs save of the backup download. APK builds.
+Pending real phone: #1, #2, #3, #7, #9 (native hashFiles/append/share move/rename-across-folders/folder remove, Android file picker for .tar, Downloads + share sheet, memory on device).
 <!-- SECTION:FINAL_SUMMARY:END -->

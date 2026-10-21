@@ -479,6 +479,9 @@ try {
       'a path outside the data folder': made([['contracts.db', entries[1].data], ['../escape.pdf', PDF]]),
       'not a backup': PDF,
     };
+    // A file in use that differs from the backup's copy of it must stay exactly as it is.
+    const x = path.join(dataDir, before.documents[0].file_path);
+    fs.writeFileSync(x, 'this computer’s own, different bytes');
     const state = await everything();
     for (const [what, bytes] of Object.entries(variants)) {
       const r = await restore(bytes);
@@ -489,6 +492,33 @@ try {
     }
     const newer = made([['contracts.db', entries[1].data]]).toString('latin1').replace('"format":1', '"format":9');
     assert.match((await restore(Buffer.from(newer, 'latin1'))).body.error, /newer version of Contract Desk/);
+    // Checked but not confirmed: still untouched; after the yes, the backup's copy replaces it.
+    assert.equal((await restore(backup)).status, 200);
+    assert.equal(sha(fs.readFileSync(x)), state.files[before.documents[0].storage_name]);
+    assert.equal((await api('POST', '/api/restore/apply')).status, 200);
+    assert.deepEqual(await everything(), before);
+  });
+
+  await check('a Windows desktop backup (paths stored as files\\name) restores here with / paths and working files', async () => {
+    const entries = await tarEntries(backup);
+    const tmpDb = path.join(os.tmpdir(), `contract-desk-win-${process.pid}.db`);
+    fs.writeFileSync(tmpDb, entries[1].data);
+    const w = new DatabaseSync(tmpDb);
+    w.exec(`UPDATE documents SET file_path = replace(file_path, '/', char(92))`);
+    w.close();
+    const winDb = fs.readFileSync(tmpDb);
+    fs.rmSync(tmpDb);
+    assert.ok(winDb.includes('files\\'));
+    const files = Object.fromEntries([['contracts.db', winDb], ...entries.slice(2).map((e) => [e.name, e.data])].map(([n, b]) => [n, { size: b.length, sha256: sha(b) }]));
+    const m = Buffer.from(JSON.stringify({ app: 'Contract Desk', format: 1, from: 'desktop', made: new Date().toISOString(), counts: {}, files }));
+    const list = [['manifest.json', m], ['contracts.db', winDb], ...entries.slice(2).map((e) => [e.name, e.data])];
+    assert.equal((await restore(Buffer.concat([...list.flatMap(([n, b]) => [tarHeader(n, b.length), b, tarPad(b.length)]), tarEnd()]))).status, 200);
+    assert.equal((await api('POST', '/api/restore/apply')).status, 200);
+    for (const d of (await api('GET', '/api/documents?page_size=100')).body.items) {
+      assert.equal(d.file_path, `files/${d.storage_name}`);
+      assert.equal((await fetch(`${BASE}/api/documents/${d.id}/file`)).status, 200, d.file_path);
+    }
+    assert.deepEqual(await everything(), before);
   });
 
   if (process.env.DB_ENGINE !== 'wasm') {
@@ -547,6 +577,17 @@ try {
     try {
       await new Promise((resolve) => lan.stdout.on('data', (b) => String(b).includes('Wi-Fi access ON') && resolve()));
       const L = `http://${lanIp}:4792`;
+      await check('Wi-Fi access: a phone with the passcode may download a backup but not restore one', async () => {
+        const login = await fetch(`${L}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"passcode":"harbor-2026"}' });
+        const Cookie = login.headers.get('set-cookie').split(';')[0];
+        assert.equal((await fetch(`${L}/api/backup`, { headers: { Cookie } })).status, 200);
+        const lanBackup = Buffer.from(await (await fetch('http://127.0.0.1:4792/api/backup')).arrayBuffer());
+        const r = await fetch(`${L}/api/restore`, { method: 'POST', headers: { Cookie, 'Content-Type': 'application/octet-stream' }, body: lanBackup });
+        assert.equal(r.status, 403);
+        assert.match((await r.json()).error, /on the computer/);
+        assert.equal((await fetch(`${L}/api/restore/apply`, { method: 'POST', headers: { Cookie } })).status, 403);
+        assert.equal((await fetch(`${L}/api/meta`, { headers: { Cookie } }).then((x) => x.json())).onThisComputer, false, 'the screens hide Restore there');
+      });
       await check('Wi-Fi access: phones need the passcode; this computer does not', async () => {
         assert.equal((await fetch(`${L}/api/contracts`)).status, 401);
         assert.equal((await fetch(`${L}/api/documents/1/file`)).status, 401, 'files are protected too');

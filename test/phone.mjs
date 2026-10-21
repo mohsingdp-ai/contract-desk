@@ -70,6 +70,7 @@ const plugin = {
       if (device.failWrite && !--device.failWrite) throw new Error('No space left on device');
       device.writes.push({ folder, name, size: bytes.length, append });
     }
+    fs.mkdirSync(path.dirname(disk(folder, name)), { recursive: true });
     (append ? fs.appendFileSync : fs.writeFileSync)(disk(folder, name), bytes);
   },
   rename: ({ folder, from, to }) => {
@@ -77,7 +78,7 @@ const plugin = {
     fs.renameSync(disk(folder, from), disk(folder, to));
     if (device.die === 'after' && to === 'contracts.db') return hang();
   },
-  remove: ({ folder, name }) => fs.rmSync(disk(folder, name), { force: true }),
+  remove: ({ folder, name }) => fs.rmSync(disk(folder, name), { recursive: true, force: true }), // a file, or a folder with its files
   list: ({ folder, dir }) => ({ names: fs.existsSync(disk(folder, dir)) ? fs.readdirSync(disk(folder, dir)) : [] }),
   copy: ({ from, to, name }) => (fs.copyFileSync(disk(from, name), disk(to, name)), { bytes: fs.statSync(disk(to, name)).size }),
   cacheFolder: () => (fs.mkdirSync(disk(`${PHONE_ROOT}/app-cache`), { recursive: true }), { path: `${PHONE_ROOT}/app-cache` }), // really under /data/user/0
@@ -1005,7 +1006,34 @@ try {
     assert.equal(await page.getByText(/No backup yet|Last backup/).count(), 0, 'restored data counts as backed up');
   });
 
-  await check('a phone backup restores on the desktop, and a desktop backup restores on the phone (also one whose database is in WAL mode)', async () => {
+  await check('a restore never touches a file in use before the yes: a changed file stays as it is (damaged backup, or "Keep"); after yes the backup’s copy replaces it', async () => {
+    const { page } = app;
+    const d = before.documents[0];
+    const x = path.join(DEFAULT_DIR, d.file_path);
+    fs.writeFileSync(x, 'this phone’s own, different bytes');
+    const mine = fs.readFileSync(x);
+    const staging = path.join(DEFAULT_DIR, '.restore');
+    const good = fs.readFileSync(backupFile);
+    let dialog = await restoreFrom(page, good.subarray(0, good.length - 1500)); // damaged: cut off after the files were read
+    await dialog.getByText(/^This backup file is damaged/).waitFor();
+    await dialog.locator('.modal-foot').getByRole('button', { name: 'Close' }).click();
+    assert.deepEqual(fs.readFileSync(x), mine, 'damaged backup: the file in use is untouched');
+    await until(() => !fs.existsSync(staging), 'staging folder removed');
+    dialog = await restoreFrom(page, good);
+    await dialog.getByText(/^After restoring: /).waitFor();
+    assert.deepEqual(fs.readFileSync(x), mine, 'checked, not yet confirmed: untouched');
+    assert.ok(fs.existsSync(path.join(staging, d.storage_name)), 'the backup’s copy waits in .restore/');
+    await dialog.getByRole('button', { name: 'Keep current records' }).click();
+    await until(() => !fs.existsSync(staging), 'staging folder removed after "Keep"');
+    assert.deepEqual(fs.readFileSync(x), mine);
+    dialog = await restoreFrom(page, good);
+    await dialog.getByRole('button', { name: 'Replace with backup' }).click();
+    await dialog.waitFor({ state: 'detached' });
+    await until(() => sha(fs.readFileSync(x)) === before.files[d.file_path] && !fs.existsSync(staging), 'the backup’s copy in place');
+    assert.deepEqual(snapshot(DEFAULT_DIR), before);
+  });
+
+  await check('a phone backup restores on the desktop, and a desktop backup restores on the phone (also a Windows one: WAL mode, files\\name paths)', async () => {
     const dir = path.join(tmp, 'desk-restore');
     const desk = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, DATA_DIR: dir, PORT: '4798', LAN_PASSCODE: '', DB_ENGINE: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
     try {
@@ -1031,9 +1059,15 @@ try {
       await dialog.waitFor({ state: 'detached' });
       await until(() => assert.deepEqual(snapshot(DEFAULT_DIR), want) ?? true, 'the desktop records and files on the phone');
 
-      // The same backup with its database in WAL mode (as a desktop contracts.db is), made 20 days ago.
+      // The same backup as a Windows desktop makes it: database in WAL mode, paths stored as files\name; made 20 days ago.
       const entries = await tarEntries(deskBackup);
-      const wal = Buffer.from(entries[1].data);
+      const winDb = path.join(tmp, 'windows.db');
+      fs.writeFileSync(winDb, entries[1].data);
+      const w = new DatabaseSync(winDb);
+      w.exec(`UPDATE documents SET file_path = replace(file_path, '/', char(92))`);
+      w.close();
+      const wal = fs.readFileSync(winDb);
+      assert.ok(wal.includes('files\\'), 'backslash paths in the database');
       wal[18] = wal[19] = 2;
       await addContract(page, 'GONE-AFTER-RESTORE');
       await page.getByRole('heading', { name: 'GONE-AFTER-RESTORE' }).waitFor();

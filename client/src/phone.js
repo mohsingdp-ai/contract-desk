@@ -233,6 +233,7 @@ async function attach(f) {
     if (phoneState.gen > ours.gen) await save(); // changes the folder copy does not have yet (killed before or during a save)
   }
   await syncPointer();
+  await native('remove', { folder: where(f), name: '.restore' }); // left by a restore that was never confirmed or finished
   const { names } = await native('list', { folder: where(f), dir: 'files' });
   await call('sweep', { names });
   setStatus('ready');
@@ -395,18 +396,19 @@ export async function backup(onProgress = () => {}) {
   return saved.name;
 }
 
-let staged = null; // a checked backup waiting for the owner's yes: { bytes, manifest, written }
+const STAGING = '.restore'; // in the data folder: a restore's files wait here until the owner says yes
+let staged = null; // a checked backup waiting for the owner's yes: { bytes, manifest, moves }
+const dropStaging = (f) => native('remove', { folder: where(f), name: STAGING }).catch((err) => console.error('Could not remove', STAGING, err));
 
 // Restore, step 1: reads the chosen file in 4 MB pieces and checks all of it (every entry's size and SHA-256, the
-// database's integrity) before anything is replaced. Document files not already here go to files/ as they come: their
-// names are new, so no current record uses them; if the check fails they are removed again. (A file of the same name
-// that is here but differs is the same document, damaged: the backup's copy replaces it.) Answers what would be replaced.
+// database's integrity). Nothing in use is touched: document files go to .restore/ (except those already here with the
+// same bytes), the database stays in memory. If the check fails, only .restore/ is removed. Answers what would be replaced.
 export async function checkRestore(file) {
   await ready;
-  cancelRestore();
+  await cancelRestore();
   const f = folder;
-  const written = []; // new files, removed again if the restore does not go ahead
-  let here; // name in files/ -> 'same' (already holds the backup's bytes), 'differs' or 'new'
+  const moves = []; // [in .restore/, in files/]
+  let here; // names in files/ that already hold exactly the backup's bytes
   let dbBytes;
   async function* pieces() {
     for (let at = 0; at < file.size; at += PIECE) yield new Uint8Array(await file.slice(at, at + PIECE).arrayBuffer());
@@ -420,12 +422,15 @@ export async function checkRestore(file) {
         if (!here) {
           const names = Object.keys(manifest.files).filter((n) => n !== 'contracts.db');
           const h = await hashFiles(f, names);
-          here = new Map(names.map((n, i) => [n, !h[i].exists ? 'new' : h[i].sha256 === manifest.files[n].sha256 ? 'same' : 'differs']));
+          here = new Set(names.filter((n, i) => h[i].exists && h[i].sha256 === manifest.files[n].sha256));
         }
-        if (here.get(name) === 'new') written.push(name);
-        let first = true;
-        if (here.get(name) !== 'same') write = async (piece) => (await native('write', { folder: where(f), name, data: await base64(piece), append: !first }), (first = false));
-        if (write && !size) await write(new Uint8Array(0));
+        if (!here.has(name)) {
+          const to = `${STAGING}/${name.slice('files/'.length)}`;
+          moves.push([to, name]);
+          let first = true;
+          write = async (piece) => (await native('write', { folder: where(f), name: to, data: await base64(piece), append: !first }), (first = false));
+          if (!size) await write(new Uint8Array(0));
+        }
       }
       return async (piece) => {
         if (piece) {
@@ -438,28 +443,31 @@ export async function checkRestore(file) {
     });
     const { now, backup } = await call('checkBackup', { bytes: dbBytes });
     if (!backup) throw damaged('its database is damaged');
-    staged = { bytes: dbBytes, manifest, written };
+    staged = { bytes: dbBytes, manifest, moves };
     return { made: manifest.made, from: manifest.from, now, backup };
   } catch (err) {
-    removeFiles(written.map((n) => n.slice('files/'.length)), f);
+    await dropStaging(f);
     throw err;
   }
 }
 
-// Step 2, after the owner said yes: the phone database is replaced, then saved to the data folder the usual way
-// (.tmp + rename), so the folder keeps the current records until the new ones are complete there. If the app dies
-// before that, the next start opens the folder's (current) records again. Files only the replaced records had go after.
+// Step 2, after the owner said yes. The files move into files/ first: their names are unique per document, so the
+// current records keep working (a file of the same name that differs is the same document, damaged: the backup's copy
+// replaces it). Then the phone database is replaced and saved to the data folder the usual way (.tmp + rename): if the
+// app dies before that, the next start opens the folder's current records, and the extra files are tidied away.
 export async function applyRestore() {
-  const { bytes, manifest } = staged;
+  const { bytes, manifest, moves } = staged;
   staged = null;
+  for (const [from, to] of moves) await native('rename', { folder: where(folder), from, to });
   phoneState = await call('import', { bytes, saved: { folder } });
   await call('noteBackup', { at: manifest.made }); // what is in the app now was backed up then
   await save();
+  await dropStaging(folder);
   const { names } = await native('list', { folder: where(folder), dir: 'files' });
-  await call('sweep', { names });
+  await call('sweep', { names }); // files only the replaced records had
 }
 
-export function cancelRestore() {
-  if (staged) removeFiles(staged.written.map((n) => n.slice('files/'.length)));
+export async function cancelRestore() {
+  if (staged) await dropStaging(folder);
   staged = null;
 }

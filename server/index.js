@@ -172,7 +172,7 @@ const upload = multer({
 const handleUpload = (parentType) => [
   upload.array('files'),
   (req, res) => {
-    const stored = (req.files || []).map((f) => ({ original_name: f.originalname, storage_name: f.filename, file_path: path.join('files', f.filename), size_bytes: f.size }));
+    const stored = (req.files || []).map((f) => ({ original_name: f.originalname, storage_name: f.filename, file_path: `files/${f.filename}`, size_bytes: f.size }));
     res.status(201).json(rules.addDocuments(parentType, req.params.id, stored, req.body.meta));
   },
 ];
@@ -207,6 +207,7 @@ const STAGING = path.join(DATA_DIR, '.restore'); // a restore being checked; lef
 fs.rmSync(STAGING, { recursive: true, force: true });
 let restoring = null; // the checked backup's manifest, waiting for the owner's yes
 const APP_VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url))).version;
+export const noteBackup = () => rules.noteBackup(new Date().toISOString());
 async function sha256File(file) {
   const h = createHash('sha256');
   for await (const chunk of fs.createReadStream(file)) h.update(chunk);
@@ -243,7 +244,8 @@ app.get('/api/backup', async (req, res) => {
       }
       yield tarEnd();
     }, res);
-    rules.noteBackup(new Date().toISOString());
+    // The desktop app notes it itself once the file is really saved (electron/main.js); a browser download is noted here.
+    if (!(process.env.BACKUP_NOTED_BY_APP && isLoopback(req))) noteBackup();
   } finally {
     fs.rmSync(snap, { force: true });
   }
@@ -251,6 +253,13 @@ app.get('/api/backup', async (req, res) => {
 
 // Restore, step 1: the backup is streamed into .restore/ and checked as a whole (every size and SHA-256, the database's
 // integrity) before anything is touched. Answers what would be replaced.
+// A restore replaces everything, so only this computer can do it (not a phone over Wi-Fi, even with the passcode).
+app.use('/api/restore', (req, res, next) => {
+  if (isLoopback(req)) return next();
+  req.resume(); // read the upload, so the phone gets the answer
+  res.status(403).json({ error: 'Restore a backup on the computer that runs Contract Desk.' });
+});
+
 app.post('/api/restore', async (req, res) => {
   restoring = null;
   fs.rmSync(STAGING, { recursive: true, force: true });

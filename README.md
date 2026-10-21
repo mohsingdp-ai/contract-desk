@@ -33,7 +33,7 @@ Windows asks once to allow it on private networks: click **Allow**. On Linux wit
 - **Deleting** a contract or NOC also deletes its documents and their files. The app always asks first.
 - **Back up** (sidebar → Backup, or the reminder after 14 days without one) saves every record and file in one `.tar` file.
   Keep it somewhere else (a USB drive, cloud storage). **Restore…** checks the whole file first, says what it will replace,
-  and asks. A backup from the phone app restores on the computer and the other way round. On the phone, the backup is saved
+  and asks (on the computer itself, not from a phone over Wi-Fi). A backup from the phone app restores on the computer and the other way round. On the phone, the backup is saved
   to Downloads and the share menu opens, so you can send it to Drive, email or a computer.
 - **Menu → File:** start with the computer.
 - Not in this version: searching inside files (OCR).
