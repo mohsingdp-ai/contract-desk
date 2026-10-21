@@ -1198,6 +1198,7 @@ a.tr:hover {
   font-size: 15px;
   cursor: pointer;
   max-width: 100%;
+  overflow-wrap: anywhere; /* a camera photo's long unbroken name would widen the whole page on a phone */
 }
 .doc-name:hover {
   text-decoration: underline;

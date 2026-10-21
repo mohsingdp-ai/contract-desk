@@ -609,11 +609,15 @@ try {
     const camera = modal(page).locator('input[capture]');
     assert.equal(await camera.getAttribute('accept'), 'image/*');
     assert.equal(await camera.getAttribute('capture'), 'environment');
-    await camera.setInputFiles(src('JPEG_20261021_101500_123.jpg', PNG)); // the name Capacitor gives a camera photo
+    const shot = 'JPEG_20261021_161350_3021510589735462447.jpg'; // the name Capacitor gives a camera photo (seen on the S24+)
+    await camera.setInputFiles(src(shot, PNG));
     await modal(page).locator('.apply-all select').selectOption('Other Documents');
     await modal(page).getByRole('button', { name: 'Upload 1 file' }).click();
     await modal(page).waitFor({ state: 'detached' });
-    await until(() => docsOf('CT-UP').some((d) => d.original_name === 'JPEG_20261021_101500_123.jpg' && d.file_type === 'image'), 'the photo filed');
+    await until(() => docsOf('CT-UP').some((d) => d.original_name === shot && d.file_type === 'image'), 'the photo filed');
+    // Its long unbroken name must wrap: on the phone it widened the whole page, so every screen and dialog slid sideways.
+    await page.locator('.doc-name', { hasText: shot.slice(0, -4) }).waitFor();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 0, 'page wider than the screen');
   });
 
   await check('a file over 500 MB gets a clear message, and nothing is written', async () => {
