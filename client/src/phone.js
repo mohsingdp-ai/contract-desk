@@ -124,7 +124,9 @@ export async function upload(url, files, meta, onProgress) {
       throw new Error(`Could not save "${file.name}" in ${f.path}: ${err.message}`);
     }
   }
-  return call('addDocuments', { parentType: kind === 'contracts' ? 'contract' : 'noc', parentId: Number(id), stored, meta: JSON.stringify(meta) });
+  const saved = await call('addDocuments', { parentType: kind === 'contracts' ? 'contract' : 'noc', parentId: Number(id), stored, meta: JSON.stringify(meta) });
+  native('clearCaptures').catch((err) => console.error('Could not remove camera photos', err)); // their copies are saved now
+  return saved;
 }
 
 // The phone's own apps: "Open with…" (PDF reader, spreadsheet app), Downloads and the share sheet. Outside the app a file

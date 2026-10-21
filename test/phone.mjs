@@ -80,6 +80,7 @@ const plugin = {
   copy: ({ from, to, name }) => (fs.copyFileSync(disk(from, name), disk(to, name)), { bytes: fs.statSync(disk(to, name)).size }),
   cacheFolder: () => (fs.mkdirSync(disk(`${PHONE_ROOT}/app-cache`), { recursive: true }), { path: `${PHONE_ROOT}/app-cache` }), // really under /data/user/0
   freeSpace: () => ({ free: device.free }),
+  clearCaptures: () => {}, // deletes the camera's own copies of photos (Android/data/.../files/Pictures)
   // BiometricAuthNative (@aparajita/capacitor-biometric-auth) and App (@capacitor/app)
   checkBiometry: () => device.bio,
   internalAuthenticate: () => {
@@ -612,9 +613,11 @@ try {
     const shot = 'JPEG_20261021_161350_3021510589735462447.jpg'; // the name Capacitor gives a camera photo (seen on the S24+)
     await camera.setInputFiles(src(shot, PNG));
     await modal(page).locator('.apply-all select').selectOption('Other Documents');
+    device.calls = [];
     await modal(page).getByRole('button', { name: 'Upload 1 file' }).click();
     await modal(page).waitFor({ state: 'detached' });
     await until(() => docsOf('CT-UP').some((d) => d.original_name === shot && d.file_type === 'image'), 'the photo filed');
+    await until(() => device.calls.includes('clearCaptures'), 'the camera\'s own copy removed once the photo is saved');
     // Its long unbroken name must wrap: on the phone it widened the whole page, so every screen and dialog slid sideways.
     await page.locator('.doc-name', { hasText: shot.slice(0, -4) }).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 0, 'page wider than the screen');

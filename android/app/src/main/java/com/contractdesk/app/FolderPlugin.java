@@ -299,6 +299,26 @@ public class FolderPlugin extends Plugin {
         call.resolve(r);
     }
 
+    // "Take photo": Capacitor's WebView has the camera write each photo to the app's own Android/data/.../files/Pictures
+    // as JPEG_<time>_<n>.jpg and never removes it. Cleared after an upload is saved (the photo is in the data folder by
+    // then) and at start (photos from a dialog that was cancelled). Only those files; nothing else lives there.
+    @Override
+    public void load() {
+        deleteCaptures();
+    }
+
+    @PluginMethod
+    public void clearCaptures(PluginCall call) {
+        deleteCaptures();
+        call.resolve();
+    }
+
+    private void deleteCaptures() {
+        File dir = getContext().getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+        File[] photos = dir == null ? null : dir.listFiles((d, n) -> n.startsWith("JPEG_") && n.endsWith(".jpg"));
+        if (photos != null) for (File f : photos) f.delete();
+    }
+
     private static long pump(InputStream in, OutputStream out) throws IOException {
         byte[] buf = new byte[1 << 16];
         long total = 0;

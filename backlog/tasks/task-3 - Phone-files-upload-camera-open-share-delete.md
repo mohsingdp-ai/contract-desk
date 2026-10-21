@@ -4,7 +4,7 @@ title: 'Phone files: upload, camera, open, share, delete'
 status: Review
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 11:44'
+updated_date: '2026-10-21 12:14'
 labels:
   - android
 milestone: m-0
@@ -49,6 +49,8 @@ Real-phone check (S24+, Android 16, 2026-10-21, build ae2566d + 507385c):
 - Found + fixed (507385c): a camera photo's long name widened the whole page, so every screen and dialog slid sideways.
 - Open (not fixed): each camera photo leaves its ~1 MB+ original in Android/data/com.contractdesk.app/files/Pictures (Capacitor's capture file), never deleted until uninstall. Not counted in the storage line.
 - Cosmetic: Samsung PDF reader shows the stored UUID name as the title, not the document name.
+
+Fixed (camera photo leftovers): the Folder plugin now deletes Capacitor's capture files (JPEG_*.jpg in Android/data/com.contractdesk.app/files/Pictures, nothing else) after each successful upload and at app start (cancelled photos). S24+ check: 4.0 MB capture present after the shutter, gone right after upload; stored copy's SHA-256 matches the capture and the photo previews; a second photo taken then cancelled stayed until a force-stop + restart, then was gone; the document was still intact after restart.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
