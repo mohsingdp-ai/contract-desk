@@ -120,6 +120,7 @@ const ops = {
     return rules.sweepOrphans();
   },
   filePaths: () => wdb.selectObjects('SELECT file_path, size_bytes FROM documents'),
+  exportData: ({ query }) => rules.exportData(query), // the workbook itself is built on the main thread (phone.js)
   request: ({ method, url, body }) => (url === '/api/meta' ? { status: 200, data: rules.meta() } : callRoute(rules, method, url, body)),
 };
 

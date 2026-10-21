@@ -12,6 +12,10 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { openDb } from '../server/db.js';
 import { createRules, storedName } from '../core/rules.js';
+import { callRoute } from '../core/routes.js';
+import { DEFAULT_CATEGORIES, tx } from '../core/schema.js';
+import { exportWorkbook } from '../core/export.js';
+import ExcelJS from 'exceljs';
 
 const executablePath = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'].find((p) => fs.existsSync(p));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'contract-desk-phone-'));
@@ -46,7 +50,11 @@ const plugin = {
     const s = fs.statSync(disk(folder, name), { throwIfNoEntry: false });
     return s ? { exists: true, size: s.size, mtime: Math.floor(s.mtimeMs) } : { exists: false, size: 0, mtime: 0 };
   },
-  write: ({ folder, name, data, append }) => void (append ? fs.appendFileSync : fs.writeFileSync)(disk(folder, name), Buffer.from(data, 'base64')),
+  write: ({ folder, name, data, append }) => {
+    const piece = Buffer.from(data, 'base64');
+    assert.ok(piece.length <= 4 * 1024 * 1024, `a ${piece.length}-byte write: big writes crash the app (decision-1)`);
+    (append ? fs.appendFileSync : fs.writeFileSync)(disk(folder, name), piece);
+  },
   rename: ({ folder, from, to }) => {
     if (device.die === 'before' && to === 'contracts.db') return hang();
     fs.renameSync(disk(folder, from), disk(folder, to));
@@ -55,6 +63,8 @@ const plugin = {
   remove: ({ folder, name }) => fs.rmSync(disk(folder, name), { force: true }),
   list: ({ folder, dir }) => ({ names: fs.existsSync(disk(folder, dir)) ? fs.readdirSync(disk(folder, dir)) : [] }),
   copy: ({ from, to, name }) => (fs.copyFileSync(disk(from, name), disk(to, name)), { bytes: fs.statSync(disk(to, name)).size }),
+  cacheFolder: () => (fs.mkdirSync(disk(`${PHONE_ROOT}/app-cache`), { recursive: true }), { path: `${PHONE_ROOT}/app-cache` }), // really under /data/user/0
+  share: (opts) => void (device.shared = opts), // Android's share menu
 };
 
 // Serves the bundle, plus phone files at the URL the fake convertFileSrc gives (the WebView's file server on Android).
@@ -130,6 +140,64 @@ const check = async (name, fn) => {
   console.log(`  ✓ ${name}`);
 };
 
+// A desktop data folder the size of decision-2's realistic database: 3,000 contracts, 300 NOCs, 10,000 documents,
+// 20,000 tag links. Distinct times, so every list has one right order.
+function seedBig(dir) {
+  const d = openDb(dir);
+  const projects = ['Port Expansion', 'Solar Farm', 'Metro Line', 'Water Works', 'Grid Upgrade', 'Harbor Wall'];
+  const firms = ['Northwind', 'Harbor Freight', 'Abacus Trading', 'Contoso', 'Fabrikam'];
+  const currencies = ['USD', 'EUR', 'PKR', 'AED'];
+  const kinds = ['Invoice', 'Packing list', 'Bill of lading', 'Bank slip', 'Declaration'];
+  const types = [['pdf', 'application/pdf', 'pdf'], ['image', 'image/png', 'png'], ['excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'xlsx']];
+  const at = (n) => new Date(Date.UTC(2026, 0, 1) + n * 60_000).toISOString();
+  tx(d, () => {
+    const c = d.prepare('INSERT INTO contracts (id, contract_no, project_name, firm_name, amount, currency, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    for (let i = 1; i <= 3000; i++) c.run(i, `CT-${i}`, projects[i % 6], firms[i % 5], (i * 137.25) % 100_000, currencies[i % 4], at(i), at((i * 7) % 3001));
+    const n = d.prepare('INSERT INTO nocs (id, indent_no, noc_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)');
+    for (let i = 1; i <= 300; i++) n.run(i, `IND-${i}`, `NOC ${projects[i % 6]}`, at(i), at((i * 7) % 307));
+    ['Urgent', 'Original', 'Copy', 'Signed', 'Pending'].forEach((name, i) => d.prepare('INSERT INTO tags (id, name, key) VALUES (?, ?, ?)').run(i + 1, name, name.toLowerCase()));
+    const doc = d.prepare(`INSERT INTO documents (id, contract_id, noc_id, display_name, original_name, storage_name, file_path, mime_type, file_type,
+      size_bytes, category, reference_no, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const link = d.prepare('INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)');
+    for (let k = 1; k <= 10_000; k++) {
+      const [type, mime, ext] = types[k % 3];
+      const stored = `00000000-0000-4000-8000-${String(k).padStart(12, '0')}.${ext}`;
+      const noc = k > 9700;
+      doc.run(k, noc ? null : (k % 3000) + 1, noc ? (k % 300) + 1 : null, `${kinds[k % 5]} ${k}`, `scan-${k}.${ext}`, stored, `files/${stored}`, mime, type,
+        k * 10, noc ? null : DEFAULT_CATEGORIES[k % 6], k % 2 ? `INV-2026-${k}` : null, at(k));
+      link.run(k, (k % 5) + 1);
+      link.run(k, ((k + 2) % 5) + 1);
+    }
+  });
+  d.close(); // merges the WAL: one complete contracts.db, ready to copy to the phone
+}
+
+// Asks the app's real database worker directly, with the same message phone.js sends, and times the answer inside the
+// worker (the test catches the reply before phone.js sees it).
+const ask = (page, url) =>
+  page
+    .workers()
+    .find((w) => w.url().includes('phone-worker'))
+    .evaluate(
+      (url) =>
+        new Promise((resolve) => {
+          const post = self.postMessage;
+          const t0 = performance.now();
+          self.postMessage = (msg, transfer) => {
+            if (msg.id !== 'test') return post.call(self, msg, transfer);
+            self.postMessage = post;
+            resolve({ ...msg.result, ms: performance.now() - t0 });
+          };
+          self.onmessage({ data: { id: 'test', op: 'request', method: 'GET', url } });
+        }),
+      url,
+    );
+const sheets = async (bytes) => {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(bytes);
+  return wb.worksheets.map((ws) => ({ name: ws.name, rows: JSON.parse(JSON.stringify(ws.getSheetValues())) }));
+};
+
 async function addContract(page, no) {
   await page.goto(`${BASE}#/contracts?new=1`);
   const form = page.locator('.modal');
@@ -156,10 +224,10 @@ try {
     assert.ok(fs.existsSync(path.join(DEFAULT_DIR, 'contracts.db')) && fs.statSync(path.join(DEFAULT_DIR, 'files')).isDirectory());
   });
 
-  await check('desktop-only parts are hidden; the data folder control is the phone one', async () => {
+  await check('desktop-only parts are hidden; Excel export and the data folder control are the phone ones', async () => {
     const { page } = app;
     assert.equal(await page.getByText('Connect phone').count(), 0);
-    assert.equal(await page.getByText('Export to Excel').count(), 0);
+    await page.getByRole('button', { name: 'Export to Excel' }).waitFor(); // a button that opens the share menu, not a download link
     await page.locator('.phone-folder').getByText(`${PHONE_ROOT}/Documents/Contract Desk`).waitFor();
     await page.getByRole('button', { name: 'Change folder…' }).waitFor();
   });
@@ -413,6 +481,164 @@ try {
     await quit();
     const again = await launch('install-7'); // uninstall + reinstall
     await again.locator('.phone-folder').getByText(y).waitFor();
+    await quit();
+  });
+
+  // ---------- search, filters, paging and Excel export on 3,000 contracts (TASK-4) ----------
+
+  // The same folder is opened by the phone and by the desktop rules; every answer must match exactly.
+  const big = path.join(tmp, 'desktop-3000');
+  seedBig(big);
+  fs.rmSync(DEFAULT_DIR, { recursive: true });
+  fs.cpSync(big, DEFAULT_DIR, { recursive: true });
+  const bigRules = createRules({ db: openDb(big), files: { remove: () => {}, list: () => [], exists: () => true } });
+  const onDesktop = (url) => JSON.parse(JSON.stringify(callRoute(bigRules, 'GET', url)));
+  const phoneSays = async (page, url) => {
+    const { ms, ...r } = await ask(page, url);
+    return r;
+  };
+  const lists = ['contracts', 'nocs', 'documents'];
+  // As the search screen asks: page_size=10.
+  const searchUrl = (list, query) => `/api/${list}?${new URLSearchParams({ ...query, page_size: 10, page: 1 })}`;
+
+  await check('search: same results in the same order as the desktop, exact matches first (3,000 contracts, 10,000 documents)', async () => {
+    device.access = true;
+    const page = await launch('install-8'); // new install: opens the folder copy
+    await page.locator('.phone-folder').waitFor();
+    for (const q of ['CT-30', 'ct-30', 'INV-2026-31', 'IND-12', 'harbor', 'urgent', 'ab', 'V-2026', 'Packing list 42']) {
+      for (const list of lists) {
+        const url = searchUrl(list, { q });
+        assert.deepEqual(await phoneSays(page, url), onDesktop(url), url);
+      }
+    }
+    const first = async (list, q) => (await phoneSays(page, searchUrl(list, { q }))).data;
+    for (const [list, q, field, want] of [
+      ['contracts', 'CT-30', 'contract_no', 'CT-30'],
+      ['contracts', 'ct-30', 'contract_no', 'CT-30'],
+      ['documents', 'INV-2026-31', 'reference_no', 'INV-2026-31'],
+      ['nocs', 'IND-12', 'indent_no', 'IND-12'],
+    ]) {
+      const d = await first(list, q);
+      assert.ok(d.total > 1, `${q}: more than the exact match`);
+      assert.equal(d.items[0][field], want, `${q}: exact match first`);
+      assert.equal(d.items[0].rank, 0);
+      assert.ok(d.items.slice(1).every((x) => x.rank > 0));
+    }
+  });
+
+  await check('every filter (project, firm, category, file type, tag, amount range, currency) narrows the same way as the desktop', async () => {
+    const { page } = app;
+    const all = await Promise.all(lists.map(async (l) => (await phoneSays(page, searchUrl(l, {}))).data.total));
+    for (const query of [
+      { project: 'Solar Farm' },
+      { firm: 'Contoso' },
+      { category: 'Packing List' },
+      { file_type: 'image' },
+      { tag: 'Signed' },
+      { tag: ' SIGNED ' },
+      { min: '1000', max: '5000' },
+      { min: '99000' },
+      { currency: 'EUR' },
+      { q: 'CT-1', currency: 'usd', category: 'Commercial Invoice', tag: 'Urgent', file_type: 'image' },
+    ]) {
+      const totals = [];
+      for (const list of lists) {
+        const url = searchUrl(list, query);
+        const r = await phoneSays(page, url);
+        assert.deepEqual(r, onDesktop(url), url);
+        totals.push(r.data.total);
+      }
+      assert.ok(totals.some((t) => t > 0) && totals.some((t, i) => t < all[i]), `${JSON.stringify(query)} narrows the results`);
+    }
+  });
+
+  await check('long result lists page correctly: every page as on the desktop, each record once', async () => {
+    const { page } = app;
+    for (const base of ['/api/documents?tag=Urgent', '/api/contracts?q=CT-1', '/api/nocs?q=IND']) {
+      const { total, pages } = onDesktop(`${base}&page_size=200`).data;
+      assert.ok(pages > 1, base);
+      const ids = [];
+      for (let p = 1; p <= pages; p++) {
+        const url = `${base}&page_size=200&page=${p}`;
+        const r = await phoneSays(page, url);
+        assert.deepEqual(r, onDesktop(url), url);
+        ids.push(...r.data.items.map((x) => x.id));
+      }
+      assert.equal(ids.length, total);
+      assert.equal(new Set(ids).size, total);
+    }
+  });
+
+  await check('search screen: Next shows the second page; a result opens its contract, a document opens its NOC or contract', async () => {
+    const { page } = app;
+    await page.goto(`${BASE}#/?q=CT-30`);
+    const section = page.locator('.result-section').filter({ has: page.locator('.section-label', { hasText: 'Contracts' }) });
+    const p2 = onDesktop(`/api/contracts?q=CT-30&page_size=10&page=2`).data;
+    await section.getByRole('button', { name: 'Next' }).click();
+    await section.getByText(`11–${Math.min(20, p2.total)} of ${p2.total}`).waitFor();
+    await section.locator('a.tr').first().getByText(p2.items[0].contract_no, { exact: true }).waitFor();
+    await section.locator('a.tr').first().click();
+    await page.waitForURL(new RegExp(`#/contracts/${p2.items[0].id}$`));
+    await page.getByRole('heading', { name: p2.items[0].contract_no }).waitFor();
+    for (const [q, url, heading] of [
+      ['Declaration 9704', '#/nocs/105', 'IND-105'], // 9704 is an NOC document
+      ['Invoice 9700', '#/contracts/701', 'CT-701'],
+    ]) {
+      await page.goto(`${BASE}#/?q=${encodeURIComponent(q)}`);
+      await page.locator('.doc-row .parent-link').click();
+      await page.waitForURL(new RegExp(`${url}$`));
+      await page.getByRole('heading', { name: heading }).waitFor();
+    }
+  });
+
+  await check('Excel export, filtered and all: built on the phone, in 4 MB pieces, handed to the share menu; same sheets as the desktop', async () => {
+    const { page } = app;
+    for (const [hash, query, note] of [
+      ['#/?q=harbor&category=Packing+List', { scope: 'all', q: 'harbor', category: 'Packing List' }, 'filtered'],
+      ['#/', { scope: 'all' }, 'all'],
+      ['#/contracts?currency=EUR', { scope: 'contracts', currency: 'EUR' }, 'filtered'],
+    ]) {
+      await page.goto(`${BASE}${hash}`);
+      device.shared = null;
+      await page.getByRole('button', { name: `Export to Excel ${note}` }).click();
+      await until(() => device.shared, `share menu for ${hash}`, 30_000);
+      const { folder, name, type } = device.shared;
+      assert.match(name, /^contract-desk-export-\d{4}-\d\d-\d\d\.xlsx$/);
+      assert.equal(type, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      const got = await sheets(fs.readFileSync(disk(folder, name)));
+      const want = await sheets(await exportWorkbook(bigRules.exportData(query)).xlsx.writeBuffer());
+      assert.deepEqual(got, want, hash);
+      assert.deepEqual(got.map((s) => s.name), query.scope === 'contracts' ? ['Contracts', 'Documents'] : ['Contracts', 'NOCs', 'Documents']);
+      assert.ok(got.at(-1).rows.length > 2, 'the Documents sheet has rows');
+    }
+  });
+
+  await check('search speed with 3,000 contracts on a slow phone (Chromium CPU slowed 4×): under half a second', async () => {
+    const { page } = app;
+    await page.goto(`${BASE}#/`);
+    await page.locator('#q').waitFor();
+    // Chromium can only slow a page's main thread, not its workers ("only supported for pages, not workers"), so the
+    // database time measured in the worker is counted 3 more times on top of the slowed screen time.
+    const cdp = await app.context.newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+    const report = [];
+    for (const q of ['CT-30', 'INV-2026-31', 'harbor', 'ab', 'urgent', 'Packing list 42']) {
+      const want = Object.fromEntries(lists.map((l) => [l, onDesktop(searchUrl(l, { q })).data.total]));
+      const t0 = await page.evaluate(() => performance.now());
+      await page.locator('#q').fill(q);
+      await page.waitForFunction((want) => {
+        const shown = Object.fromEntries([...document.querySelectorAll('.result-section')].map((s) => [s.querySelector('.section-label').firstChild.textContent, s.querySelector('.section-count')?.textContent]));
+        return shown.Contracts === want.contracts.toLocaleString() && shown.NOCs === want.nocs.toLocaleString() && shown.Documents === want.documents.toLocaleString();
+      }, want);
+      const screen = (await page.evaluate(() => performance.now())) - t0;
+      let db = 0;
+      for (const l of lists) db += (await ask(page, searchUrl(l, { q }))).ms;
+      const slowPhone = screen + 3 * db;
+      report.push(`${q}: ${Math.round(screen)} ms on screen (incl. 120 ms typing pause), ${db.toFixed(1)} ms database → ${Math.round(slowPhone)} ms`);
+      assert.ok(slowPhone < 500, report.at(-1));
+    }
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    console.log(report.map((r) => `      ${r}`).join('\n'));
     await quit();
   });
 

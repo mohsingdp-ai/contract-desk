@@ -437,17 +437,28 @@ function FilterBar({ params, set, facets, meta, show }) {
 }
 
 function ExportLink({ scope, filters, label = 'Export to Excel' }) {
-  if (isPhone) return null; // phone export comes with TASK-4
+  const [busy, setBusy] = useState(false);
   const { sort, ...f } = filters;
   const filtered = Object.keys(f).length > 0;
-  return (
-    <a
-      className="btn"
-      href={`/api/export.xlsx${qs({ scope, ...f })}`}
-      title={filtered ? 'Exports the records matching your current search and filters' : 'Exports every record'}
-    >
+  const title = filtered ? 'Exports the records matching your current search and filters' : 'Exports every record';
+  const inner = (
+    <>
       <Icon name="sheet" /> {label}
       <span className="btn-note">{filtered ? 'filtered' : 'all'}</span>
+    </>
+  );
+  // The phone has no server to download from: the app builds the file and opens Android's share menu.
+  if (isPhone) {
+    const share = () => (setBusy(true), phone.shareExport({ scope, ...f }).catch((err) => alert(err.message)).finally(() => setBusy(false)));
+    return (
+      <button className="btn" title={title} disabled={busy} onClick={share}>
+        {inner}
+      </button>
+    );
+  }
+  return (
+    <a className="btn" href={`/api/export.xlsx${qs({ scope, ...f })}`} title={title}>
+      {inner}
     </a>
   );
 }
