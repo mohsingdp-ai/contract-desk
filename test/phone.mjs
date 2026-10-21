@@ -262,6 +262,9 @@ const away = (page, ms) =>
     Date.now = now;
   }, ms);
 const lockBox = (page) => page.getByLabel('Lock with fingerprint or face');
+// Data folder, storage, backup and restore, theme and lock live on Settings (TASK-13).
+const toSettings = (page) => page.goto(`${BASE}#/settings`);
+const folderShown = (page, dir) => page.locator('.setting-path').getByText(dir, { exact: true }).waitFor();
 
 async function addContract(page, no) {
   await page.goto(`${BASE}#/contracts?new=1`);
@@ -295,8 +298,25 @@ try {
     assert.equal(await page.getByRole('link', { name: /Export to Excel/ }).count(), 0); // no download link: Open and Share buttons
     await page.getByRole('button', { name: 'Open Excel' }).waitFor();
     await page.getByRole('button', { name: 'Share Excel export' }).waitFor();
-    await page.locator('.phone-folder').getByText(`${PHONE_ROOT}/Documents/Contract Desk`).waitFor();
+    assert.equal(await page.getByRole('button', { name: /^(Change folder…|Restore…)$/ }).count(), 0, 'not on Search any more: on Settings');
+  });
+
+  await check('Settings tab in the top bar: data folder with Change folder…, storage, Back up now, Restore…, theme, fingerprint lock, categories; back returns', async () => {
+    const { page } = app;
+    await page.locator('.rail-nav').getByRole('link', { name: 'Settings' }).click();
+    await page.getByRole('heading', { level: 1, name: 'Settings' }).waitFor();
+    await folderShown(page, `${PHONE_ROOT}/Documents/Contract Desk`);
     await page.getByRole('button', { name: 'Change folder…' }).waitFor();
+    await page.getByText(/^Uses .+ · 8\.0 GB free on the phone$/).waitFor();
+    await page.getByRole('button', { name: 'Back up now' }).waitFor();
+    await page.getByRole('button', { name: 'Restore…' }).waitFor();
+    await page.getByRole('button', { name: 'Switch to dark theme' }).waitFor();
+    await lockBox(page).waitFor();
+    await page.getByRole('link', { name: 'Document categories' }).waitFor();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 0, 'no sideways scroll');
+    await back(page);
+    await page.locator('#q').waitFor();
+    assert.ok(!device.exited);
   });
 
   await check('add a contract; ct-001 is refused as a duplicate of CT-001; the folder copy is saved ~2 s later', async () => {
@@ -323,12 +343,15 @@ try {
 
   await check('storage: shows what the data folder uses and the free space; warns when the phone is nearly full', async () => {
     const { page } = app;
-    await page.goto(BASE);
+    await toSettings(page);
     const kb = (fs.statSync(path.join(DEFAULT_DIR, 'contracts.db')).size / 1024).toFixed(0); // no documents yet
     await page.getByText(`Uses ${kb} KB · 8.0 GB free on the phone`).waitFor();
     assert.equal(await page.getByText('The phone is nearly full').count(), 0);
     device.free = 300 * 1024 ** 2;
     await page.reload();
+    await page.getByText('The phone is nearly full: only 300.0 MB free. Free up space before adding documents').waitFor();
+    // also on Search, the front door
+    await page.goto(BASE);
     await page.getByText('The phone is nearly full: only 300.0 MB free. Free up space before adding documents').waitFor();
     // the same warning in the upload dialog
     await page.goto(`${BASE}#/contracts`);
@@ -361,7 +384,7 @@ try {
 
   await check('fingerprint lock: off by default; turning it on asks for a fingerprint first', async () => {
     const { page } = app;
-    await page.goto(BASE);
+    await toSettings(page);
     assert.equal(await lockBox(page).isChecked(), false);
     device.bioFail = true; // a failed check leaves it off
     device.calls = [];
@@ -414,6 +437,7 @@ try {
     device.bioFail = true;
     const page = await launch('install-1'); // lock still on
     await page.locator('#q').waitFor();
+    await toSettings(page);
     await page.getByText('Set a screen lock (PIN, pattern, fingerprint or face)').waitFor();
     await lockBox(page).click(); // can always be turned off
     assert.equal(await lockBox(page).isChecked(), false);
@@ -707,13 +731,17 @@ try {
     await until(() => !fs.existsSync(path.join(filesDir, gone.storage_name)), 'its file removed');
     await until(() => docsOf('CT-UP').length === docs.length - 1, 'its record removed from the folder copy');
     assert.deepEqual(Object.fromEntries(fs.readdirSync(filesDir).map((n) => [n, fs.readFileSync(path.join(filesDir, n))])), others);
-    // a delete from the search screen's drawer updates its storage line (8 MB less)
-    await page.goto(`${BASE}#/?q=scan-big`);
+    // a delete from the search screen's drawer shows on the Settings storage line (8 MB less)
+    await toSettings(page);
+    await page.getByText(/^Uses /).waitFor();
     const was = await page.locator('.phone-space').innerText();
+    await page.goto(`${BASE}#/?q=scan-big`);
     const big = await openDrawer(page, 'scan-big');
     await big.getByRole('button', { name: 'Delete' }).click();
     await page.locator('.modal').getByRole('button', { name: 'Delete' }).click();
-    await page.waitForFunction((was) => document.querySelector('.phone-space')?.innerText !== was, was);
+    await big.waitFor({ state: 'detached' });
+    await toSettings(page);
+    await page.waitForFunction((was) => document.querySelector('.phone-space')?.innerText.startsWith('Uses') && document.querySelector('.phone-space').innerText !== was, was);
     await quit();
   });
 
@@ -823,9 +851,9 @@ try {
     fs.mkdirSync(moved, { recursive: true });
     const oldFiles = fs.readdirSync(path.join(DEFAULT_DIR, 'files'));
     device.pick = { uri: treeOf('Documents/Moved'), path: `${PHONE_ROOT}/Documents/Moved` };
-    await page.goto(BASE);
+    await toSettings(page);
     await page.getByRole('button', { name: 'Change folder…' }).click();
-    await page.locator('.phone-folder').getByText(`${PHONE_ROOT}/Documents/Moved`).waitFor();
+    await folderShown(page, `${PHONE_ROOT}/Documents/Moved`);
     assert.deepEqual(contractNos(moved), ['CT-PICK']);
     assert.deepEqual(fs.readdirSync(path.join(moved, 'files')), oldFiles);
     assert.deepEqual(contractNos(DEFAULT_DIR), ['CT-PICK']);
@@ -837,7 +865,7 @@ try {
     fs.cpSync(desk, DEFAULT_DIR, { recursive: true }); // DESK-9 and IND-DESK, made on the desktop
     device.pick = { uri: treeOf('Documents/Contract Desk'), path: `${PHONE_ROOT}/Documents/Contract Desk` };
     await page.getByRole('button', { name: 'Change folder…' }).click();
-    await page.locator('.phone-folder').getByText(`${PHONE_ROOT}/Documents/Contract Desk`).waitFor();
+    await folderShown(page, `${PHONE_ROOT}/Documents/Contract Desk`);
     await page.goto(`${BASE}#/contracts`);
     await page.getByText('DESK-9').waitFor();
     assert.equal(await page.getByText('CT-PICK').count(), 0);
@@ -860,14 +888,16 @@ try {
     device.access = true;
     const moved = `${PHONE_ROOT}/Documents/Moved`;
     const page = await launch('install-5');
-    await page.locator('.phone-folder').getByText(`${PHONE_ROOT}/Documents/Contract Desk`).waitFor();
+    await toSettings(page);
+    await folderShown(page, `${PHONE_ROOT}/Documents/Contract Desk`);
     device.pick = { uri: treeOf('Documents/Moved'), path: moved };
     await page.getByRole('button', { name: 'Change folder…' }).click(); // it has records: "Open the records…?" is accepted
-    await page.locator('.phone-folder').getByText(moved).waitFor();
+    await folderShown(page, moved);
     assert.equal(fs.readFileSync(path.join(storage, 'Documents', '.contract-desk-folder'), 'utf8'), moved);
     await quit();
     const again = await launch('install-6'); // uninstall + reinstall
-    await again.locator('.phone-folder').getByText(moved).waitFor();
+    await toSettings(again);
+    await folderShown(again, moved);
     await again.goto(`${BASE}#/contracts`);
     await again.getByText('CT-PICK').waitFor();
     await quit();
@@ -883,7 +913,9 @@ try {
     await page.getByText('All files access is off.').waitFor();
     device.pick = { uri: treeOf('Documents/Contract Desk'), path: y };
     await page.getByRole('button', { name: 'Choose folder' }).click(); // picker link; "Open the records…?" accepted
-    await page.locator('.phone-folder').getByText(y).waitFor();
+    await page.locator('#q').waitFor();
+    await toSettings(page);
+    await folderShown(page, y);
     assert.equal(pointer(), x, 'without access the note cannot be updated yet');
     await quit();
     device.access = true; // the owner turns All files access on
@@ -891,7 +923,8 @@ try {
     await until(() => pointer() === y, 'note updated to the picked folder');
     await quit();
     const again = await launch('install-7'); // uninstall + reinstall
-    await again.locator('.phone-folder').getByText(y).waitFor();
+    await toSettings(again);
+    await folderShown(again, y);
     await quit();
   });
 
@@ -927,7 +960,9 @@ try {
     categories: folderDb(dir, 'SELECT * FROM categories ORDER BY id'),
     files: Object.fromEntries(folderDb(dir, 'SELECT file_path FROM documents').map(({ file_path }) => [file_path, sha(fs.readFileSync(path.join(dir, file_path)))])),
   });
-  const restoreFrom = async (page, bytes) => {
+  // From Settings, or (emptyDesk) the empty desk's own "Restore a backup…" on Search.
+  const restoreFrom = async (page, bytes, { emptyDesk } = {}) => {
+    if (!emptyDesk) await toSettings(page);
     const file = path.join(tmp, 'chosen.tar');
     fs.writeFileSync(file, bytes);
     await page.locator('input[aria-label="Backup file"]').first().setInputFiles(file);
@@ -944,9 +979,14 @@ try {
     assert.ok(before.contracts.length && before.nocs.length && before.documents.length >= 2, 'records and files to back up');
     device.calls = [];
     device.shared = null;
-    await page.locator('.phone-folder').getByRole('button', { name: 'Back up…' }).click();
+    await toSettings(page);
+    await page.getByText(/^Not backed up yet\./).waitFor();
+    await page.getByRole('button', { name: 'Back up now' }).click();
     await page.getByText(/Backup saved in Downloads as contract-desk-backup-\d{4}-\d\d-\d\d\.tar/).waitFor();
-    await page.getByText('No backup yet.').waitFor({ state: 'detached' });
+    await page.getByText(/^Last backup /).waitFor();
+    await page.goto(BASE);
+    await page.locator('#q').waitFor();
+    assert.equal(await page.getByText('No backup yet.').count(), 0, 'no reminder once backed up');
     const { as, mime, bytes } = device.shared;
     assert.match(as, /^contract-desk-backup-\d{4}-\d\d-\d\d\.tar$/);
     assert.equal(mime, 'application/x-tar');
@@ -972,7 +1012,6 @@ try {
     await page.getByRole('heading', { name: 'AFTER-BACKUP' }).waitFor();
     await until(() => contractNos(DEFAULT_DIR).includes('AFTER-BACKUP'), 'AFTER-BACKUP saved');
     const names = fs.readdirSync(filesDir).sort();
-    await page.goto(BASE);
     const dialog = await restoreFrom(page, fs.readFileSync(backupFile));
     const [c, n, d] = [before.contracts.length, before.nocs.length, before.documents.length];
     await dialog.getByText(`Now: ${c + 1} contracts, ${n} NOCs, ${d} documents`).waitFor();
@@ -1015,7 +1054,7 @@ try {
     for (const [what, bytes] of Object.entries(variants)) {
       device.calls = [];
       device.written = [];
-      const dialog = await restoreFrom(page, bytes);
+      const dialog = await restoreFrom(page, bytes, { emptyDesk: true });
       await dialog.getByText(/^This backup file is damaged or is not a Contract Desk backup \(.+\)\. Nothing was changed\.$/).waitFor();
       await dialog.locator('.modal-foot').getByRole('button', { name: 'Close' }).click();
       await dialog.waitFor({ state: 'detached' });
@@ -1032,7 +1071,7 @@ try {
 
   await check('wipe the app and its folder, then restore: every record, tag and file comes back', async () => {
     const { page } = app;
-    const dialog = await restoreFrom(page, fs.readFileSync(backupFile));
+    const dialog = await restoreFrom(page, fs.readFileSync(backupFile), { emptyDesk: true });
     await dialog.getByText('Now: 0 contracts, 0 NOCs, 0 documents').waitFor();
     await dialog.getByRole('button', { name: 'Replace with backup' }).click();
     await page.getByRole('heading', { name: 'The desk is empty.' }).waitFor({ state: 'detached' }); // reloaded with the records
@@ -1185,7 +1224,7 @@ try {
   await check('search: same results in the same order as the desktop, exact matches first (3,000 contracts, 10,000 documents)', async () => {
     device.access = true;
     const page = await launch('install-8'); // new install: opens the folder copy
-    await page.locator('.phone-folder').waitFor();
+    await page.locator('#q').waitFor();
     for (const q of ['CT-30', 'ct-30', 'INV-2026-31', 'IND-12', 'harbor', 'urgent', 'ab', 'V-2026', 'Packing list 42']) {
       for (const list of lists) {
         const url = searchUrl(list, { q });
@@ -1205,6 +1244,32 @@ try {
       assert.equal(d.items[0].rank, 0);
       assert.ok(d.items.slice(1).every((x) => x.rank > 0));
     }
+  });
+
+  await check('top bar with 3,000 contracts and 300 NOCs fits 360 and 412 px phones: tabs and Settings finger-sized, nothing overlaps or scrolls', async () => {
+    const { page } = app;
+    for (const width of [360, 412]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(BASE);
+      await page.locator('#q').waitFor();
+      const bar = await page.evaluate(() => {
+        const nav = document.querySelector('.rail-nav');
+        const items = [...document.querySelectorAll('.rail > *:not(.rail-nav), .rail-nav > a')]
+          .filter((e) => e.offsetParent !== null)
+          .map((e) => ({ name: e.getAttribute('aria-label') || e.textContent.trim(), ...JSON.parse(JSON.stringify(e.getBoundingClientRect())) }));
+        return { items, navScroll: nav.scrollWidth - nav.clientWidth, pageScroll: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+      });
+      const names = bar.items.map((i) => i.name);
+      assert.deepEqual(names, ['Contract Desk home', 'Search/', 'Contracts3,000', 'NOCs300', 'Settings'], `${width}: what the top bar shows`); // counts hidden by CSS, still in the text
+      assert.equal(bar.navScroll, 0, `${width}: the tabs don't scroll`);
+      assert.equal(bar.pageScroll, 0, `${width}: no sideways page scroll`);
+      for (const [i, a] of bar.items.entries()) {
+        assert.ok(a.left >= 0 && a.right <= width, `${width}: ${a.name} inside the screen`);
+        if (i) assert.ok(a.height >= 44 && (a.name !== 'Settings' || a.width >= 44), `${width}: ${a.name} is ${Math.round(a.width)}x${Math.round(a.height)}`);
+        for (const b of bar.items.slice(i + 1)) assert.ok(a.right <= b.left || b.right <= a.left, `${width}: ${a.name} overlaps ${b.name}`);
+      }
+    }
+    await page.setViewportSize({ width: 412, height: 915 });
   });
 
   await check('every filter (project, firm, category, file type, tag, amount range, currency) narrows the same way as the desktop', async () => {
@@ -1353,7 +1418,8 @@ try {
     device.calls = [];
     device.shared = null;
     const t0 = Date.now();
-    await page.locator('.phone-folder').getByRole('button', { name: 'Back up…' }).click();
+    await toSettings(page);
+    await page.getByRole('button', { name: 'Back up now' }).click();
     await page.getByText(/Backup saved in Downloads/).waitFor({ timeout: 120_000 });
     polling = false;
     await poll;

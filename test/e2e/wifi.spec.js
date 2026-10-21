@@ -24,6 +24,13 @@ test('phone on Wi-Fi: passcode screen, wrong code refused, right code unlocks an
   await expect(page.locator('.search-hero')).toBeVisible();
   await expect(page.getByText('Wi-Fi access on · passcode')).toHaveCount(1);
 
+  // Settings (the gear in the top bar): a backup can be made from here, but a restore only on the computer itself.
+  await page.getByRole('link', { name: 'Settings' }).tap();
+  await expect(page.getByRole('link', { name: 'Back up now' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Restore/ })).toHaveCount(0);
+  await expect(page.getByText('Restore works only on the computer that runs Contract Desk.')).toBeVisible();
+  await page.getByRole('link', { name: 'Search' }).tap();
+
   await page.locator('#q').fill('WIFI-001');
   await page.locator('a.tr').filter({ hasText: 'WIFI-001' }).tap();
   await expect(page.getByRole('heading', { level: 1, name: 'WIFI-001' })).toBeVisible();

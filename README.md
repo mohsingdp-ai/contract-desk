@@ -13,7 +13,7 @@ Download from the [Releases page](https://github.com/mohsingdp-ai/contract-desk/
 - **Linux:** make the `.AppImage` executable (right-click → Properties, or `chmod +x`), then double-click it.
 
 On first launch you choose where your records are kept (suggested: **Documents/Contract Desk**).
-Change it any time with **Change…** under "Data folder" in the sidebar: the app can move your records
+Change it any time in **Settings** (sidebar; the gear on a phone) → Data folder → **Change…**: the app can move your records
 there (copied and checked first; the old folder is kept), or open a folder that already has records.
 
 ## Use it on your phone
@@ -28,10 +28,10 @@ Windows asks once to allow it on private networks: click **Allow**. On Linux wit
 ## Good to know
 
 - **Search** looks at contract and indent numbers, names, filenames, Reference No. and tags. Exact matches come first.
-- **Document categories** (Bank Payment Documents, Commercial Invoice, …) are yours to change: sidebar → **Document categories**
+- **Document categories** (Bank Payment Documents, Commercial Invoice, …) are yours to change: **Settings** → **Document categories**
   to add, rename, reorder or remove them. Removing one moves its documents to another category first.
 - **Deleting** a contract or NOC also deletes its documents and their files. The app always asks first.
-- **Back up** (sidebar → Backup, or the reminder after 14 days without one) saves every record and file in one `.tar` file.
+- **Back up** (**Settings** → Back up now, or the reminder after 14 days without one) saves every record and file in one `.tar` file.
   Keep it somewhere else (a USB drive, cloud storage). **Restore…** checks the whole file first, says what it will replace,
   and asks (on the computer itself, not from a phone over Wi-Fi). A backup from the phone app restores on the computer and the other way round. On the phone, the backup is saved
   to Downloads and the share menu opens, so you can send it to Drive, email or a computer.
