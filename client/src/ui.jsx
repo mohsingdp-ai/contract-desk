@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api, uploadFiles, fmtDate, fmtSize, tagKey, fileUrl, isPhone } from './api.js';
-import { docSrc } from './phone.js';
+import { docSrc, openDoc, saveCopy, shareDoc } from './phone.js';
 
 const ICONS = {
   search: 'M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Zm5.3-2.2L21 21',
@@ -21,6 +21,8 @@ const ICONS = {
   check: 'M5 12.5l4.5 4.5L19 7.5',
   chevron: 'M6 9l6 6 6-6',
   chevronUp: 'M6 15l6-6 6 6',
+  camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z',
+  share: 'M12 15V4m0 0L8 8m4-4 4 4M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7',
 };
 
 export function Icon({ name, size = 16 }) {
@@ -262,6 +264,7 @@ export function UploadDialog({ parent, categories, initialCategory, tagSuggestio
   const [progress, setProgress] = useState(null);
   const [error, setError] = useState('');
   const input = useRef();
+  const camera = useRef();
 
   const addFiles = (list) => {
     const files = [...list];
@@ -316,6 +319,15 @@ export function UploadDialog({ parent, categories, initialCategory, tagSuggestio
           </div>
           <input ref={input} type="file" multiple accept={ACCEPT} hidden onChange={(e) => (addFiles(e.target.files), (e.target.value = ''))} />
         </div>
+        {/* Phone app: "capture" makes the WebView open the camera; the photo is staged like any other file. */}
+        {isPhone && (
+          <>
+            <button className="btn camera-btn" onClick={() => camera.current.click()}>
+              <Icon name="camera" /> Take photo
+            </button>
+            <input ref={camera} type="file" accept="image/*" capture="environment" hidden onChange={(e) => (addFiles(e.target.files), (e.target.value = ''))} />
+          </>
+        )}
 
         {rows.length > 0 && (
           <>
@@ -394,7 +406,7 @@ export function UploadDialog({ parent, categories, initialCategory, tagSuggestio
 }
 
 // Phone/tablet browsers either can't render a PDF in an iframe (Android) or show only its first page (iOS).
-const inlinePdf = !window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+const inlinePdf = !isPhone && !window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 
 export function DocDrawer({ id, meta, tagSuggestions, onClose, onChanged, onOpenParent }) {
   const [doc, setDoc] = useState(null);
@@ -402,6 +414,8 @@ export function DocDrawer({ id, meta, tagSuggestions, onClose, onChanged, onOpen
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [note, setNote] = useState(''); // phone: result of Open / Save to Downloads / Share
+  const phoneAction = (fn) => (setNote(''), fn().catch((err) => setNote(err.message)));
 
   useEffect(() => {
     setDoc(null);
@@ -458,7 +472,11 @@ export function DocDrawer({ id, meta, tagSuggestions, onClose, onChanged, onOpen
                   <div className="preview-excel preview-pdf">
                     <Icon name="open" size={36} />
                     <p>Phones can't show PDFs inside a page.</p>
-                    {!isPhone && (
+                    {isPhone ? (
+                      <button className="btn btn-primary" onClick={() => phoneAction(() => openDoc(doc))}>
+                        <Icon name="open" /> Open PDF
+                      </button>
+                    ) : (
                       <a className="btn btn-primary" href={fileUrl(doc.id, false, doc.display_name)} target="_blank" rel="noreferrer">
                         <Icon name="open" /> Open PDF
                       </a>
@@ -470,7 +488,11 @@ export function DocDrawer({ id, meta, tagSuggestions, onClose, onChanged, onOpen
                 <div className="preview-excel">
                   <Icon name="sheet" size={40} />
                   <p>Spreadsheets have no in-app preview.</p>
-                  {!isPhone && (
+                  {isPhone ? (
+                    <button className="btn btn-primary" onClick={() => phoneAction(() => openDoc(doc))}>
+                      <Icon name="open" /> Open {doc.original_name.split('.').pop().toUpperCase()}
+                    </button>
+                  ) : (
                     <a className="btn btn-primary" href={fileUrl(doc.id, true)}>
                       <Icon name="download" /> Download {doc.original_name.split('.').pop().toUpperCase()}
                     </a>
@@ -478,8 +500,17 @@ export function DocDrawer({ id, meta, tagSuggestions, onClose, onChanged, onOpen
                 </div>
               )}
             </div>
-            {/* Phone: opening and sharing files comes with TASK-3. */}
             <div className="drawer-actions">
+              {isPhone && (
+                <>
+                  <button className="btn" onClick={() => phoneAction(async () => setNote(`Saved to Downloads as ${await saveCopy(doc)}`))}>
+                    <Icon name="download" /> Save to Downloads
+                  </button>
+                  <button className="btn" onClick={() => phoneAction(() => shareDoc(doc))}>
+                    <Icon name="share" /> Share
+                  </button>
+                </>
+              )}
               {!isPhone && (
                 <a className="btn" href={fileUrl(doc.id, true)}>
                   <Icon name="download" /> Download
@@ -495,6 +526,7 @@ export function DocDrawer({ id, meta, tagSuggestions, onClose, onChanged, onOpen
                 <Icon name="trash" /> Delete
               </button>
             </div>
+            {note && <p className="drawer-note">{note}</p>}
 
             <form className="drawer-form" onSubmit={save}>
               <h3 className="section-label">Details</h3>

@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { openDb } from '../server/db.js';
 import { createRules, storedName } from '../core/rules.js';
 
@@ -26,7 +27,9 @@ await build({ configFile: path.resolve('vite.config.js'), logLevel: 'error', bui
 // ---------- the "phone" ----------
 
 // die: 'before' / 'after' makes the next contracts.db replace hang before / after it happens, so the test can "kill" the app there.
-const device = { access: false, grantOnRequest: true, pick: null, calls: [], die: null, hung: false };
+// writes: pieces written to files/; failWrite: the n-th next write to files/ fails (phone storage full); opened/shared:
+// what the phone's own apps were handed.
+const device = { access: false, grantOnRequest: true, pick: null, calls: [], die: null, hung: false, writes: [], failWrite: 0, opened: null, shared: null, slow: 0 };
 const hang = () => ((device.hung = true), new Promise(() => {}));
 // Folder (path or picker link) + name -> file on disk.
 function disk(folder, name = '') {
@@ -37,6 +40,12 @@ function disk(folder, name = '') {
   assert.ok(folder.startsWith(PHONE_ROOT), folder);
   return path.join(storage, folder.slice(PHONE_ROOT.length), name);
 }
+// A file:// or picker content:// link (as phone.js builds them) -> file on disk.
+function uriFile(src) {
+  if (!src.startsWith('content://')) return disk(decodeURIComponent(src.replace('file://', '')));
+  const [tree, doc] = src.split('/document/');
+  return disk(tree, decodeURIComponent(doc).slice(decodeURIComponent(tree.split('/tree/')[1]).length + 1));
+}
 const plugin = {
   hasAllFilesAccess: () => ({ granted: device.access }),
   requestAllFilesAccess: () => ((device.access = device.grantOnRequest), { granted: device.access }),
@@ -46,7 +55,14 @@ const plugin = {
     const s = fs.statSync(disk(folder, name), { throwIfNoEntry: false });
     return s ? { exists: true, size: s.size, mtime: Math.floor(s.mtimeMs) } : { exists: false, size: 0, mtime: 0 };
   },
-  write: ({ folder, name, data, append }) => void (append ? fs.appendFileSync : fs.writeFileSync)(disk(folder, name), Buffer.from(data, 'base64')),
+  write: ({ folder, name, data, append }) => {
+    const bytes = Buffer.from(data, 'base64');
+    if (name.startsWith('files/')) {
+      if (device.failWrite && !--device.failWrite) throw new Error('No space left on device');
+      device.writes.push({ folder, name, size: bytes.length, append });
+    }
+    (append ? fs.appendFileSync : fs.writeFileSync)(disk(folder, name), bytes);
+  },
   rename: ({ folder, from, to }) => {
     if (device.die === 'before' && to === 'contracts.db') return hang();
     fs.renameSync(disk(folder, from), disk(folder, to));
@@ -55,19 +71,20 @@ const plugin = {
   remove: ({ folder, name }) => fs.rmSync(disk(folder, name), { force: true }),
   list: ({ folder, dir }) => ({ names: fs.existsSync(disk(folder, dir)) ? fs.readdirSync(disk(folder, dir)) : [] }),
   copy: ({ from, to, name }) => (fs.copyFileSync(disk(from, name), disk(to, name)), { bytes: fs.statSync(disk(to, name)).size }),
+  saveToDownloads: ({ folder, name, as }) => {
+    fs.mkdirSync(path.join(storage, 'Download'), { recursive: true });
+    fs.copyFileSync(disk(folder, name), path.join(storage, 'Download', as));
+    return { name: as };
+  },
+  share: ({ folder, name, as, mime }) => void (device.shared = { folder, bytes: fs.readFileSync(disk(folder, name)), as, mime }),
 };
+// @capacitor-community/file-opener: hands the file to the phone's own app.
+const fileOpener = { open: ({ filePath, contentType }) => void (device.opened = { filePath, bytes: fs.readFileSync(uriFile(filePath)), contentType }) };
 
 // Serves the bundle, plus phone files at the URL the fake convertFileSrc gives (the WebView's file server on Android).
 const server = http.createServer((req, res) => {
   const url = decodeURIComponent(new URL(req.url, 'http://x').pathname);
-  let file;
-  if (url.startsWith('/__folder__/')) {
-    const src = url.slice('/__folder__/'.length);
-    if (src.startsWith('content://')) {
-      const [tree, doc] = src.split('/document/');
-      file = disk(tree, decodeURIComponent(doc).slice(decodeURIComponent(tree.split('/tree/')[1]).length + 1));
-    } else file = disk(decodeURIComponent(src.replace('file://', '')));
-  } else file = path.join(dist, url === '/' ? 'index.html' : url);
+  const file = url.startsWith('/__folder__/') ? uriFile(url.slice('/__folder__/'.length)) : path.join(dist, url === '/' ? 'index.html' : url);
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return res.writeHead(404).end();
   const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm' };
   res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream' }).end(fs.readFileSync(file));
@@ -79,12 +96,17 @@ let app; // { context, page }
 const errors = [];
 async function launch(profile, { oldWebView = false } = {}) {
   const context = await chromium.launchPersistentContext(path.join(tmp, profile), { executablePath, viewport: { width: 412, height: 915 }, hasTouch: true });
-  await context.exposeBinding('__native', (src, method, opts) => (device.calls.push(method), plugin[method](opts) ?? {}));
+  await context.exposeBinding('__native', async (src, name, method, opts) => {
+    device.calls.push(method);
+    const result = (await (name === 'FileOpener' ? fileOpener : plugin)[method](opts)) ?? {};
+    if (device.slow) await new Promise((r) => setTimeout(r, device.slow)); // a slow phone, so the progress bar can be seen
+    return result;
+  });
   await context.addInitScript(() => {
     window.Capacitor = {
       isNativePlatform: () => true,
       convertFileSrc: (u) => `/__folder__/${encodeURIComponent(u)}`,
-      nativePromise: (name, method, opts) => window.__native(method, opts),
+      nativePromise: (name, method, opts) => window.__native(name, method, opts),
     };
   });
   if (oldWebView) {
@@ -287,6 +309,192 @@ try {
     await quit();
   });
 
+  // ---------- documents on the phone (TASK-3) ----------
+
+  const up = path.join(tmp, 'uploads'); // files on the "phone" to upload
+  fs.mkdirSync(up);
+  const src = (name, bytes) => (fs.writeFileSync(path.join(up, name), bytes), path.join(up, name));
+  const PIECE = 4 * 1024 * 1024;
+  const sources = [
+    ...Array.from({ length: 6 }, (_, i) => src(`contract-${i + 1}.pdf`, Buffer.from(`%PDF-1.4 contract ${i + 1}`))),
+    src('scan-big.pdf', randomBytes(2 * PIECE + 12345)), // three pieces
+    ...Array.from({ length: 7 }, (_, i) => src(`photo-${i + 1}.png`, PNG)),
+    ...Array.from({ length: 5 }, (_, i) => src(`sheet-${i + 1}.xlsx`, randomBytes(3000 + i))),
+    src('list.csv', 'a,b\n1,2\n'),
+  ];
+  const filesDir = path.join(DEFAULT_DIR, 'files');
+  const docsOf = (no) =>
+    folderDb(DEFAULT_DIR, `SELECT d.* FROM documents d JOIN contracts c ON c.id = d.contract_id WHERE c.contract_no = '${no}' ORDER BY d.id`);
+  const modal = (page) => page.locator('.modal');
+  const openUpload = async (page) => {
+    await page.locator('.page-actions').getByRole('button', { name: 'Add documents' }).click();
+    await modal(page).locator('.dropzone input[type=file]').waitFor({ state: 'attached' });
+  };
+  const drawer = (page) => page.getByRole('complementary', { name: 'Document' });
+  const openDrawer = async (page, name) => {
+    if (await drawer(page).count()) await drawer(page).getByRole('button', { name: 'Close document' }).click();
+    await page.getByRole('button', { name, exact: true }).first().click();
+    return drawer(page);
+  };
+  let upId;
+
+  await check('upload 20 mixed files (PDF, image, Excel) with category, Reference No. and tags; written in 4 MB pieces, with progress', async () => {
+    const page = await launch('install-1');
+    await addContract(page, 'CT-UP');
+    await page.getByRole('heading', { name: 'CT-UP' }).waitFor();
+    await openUpload(page);
+    await modal(page).locator('.dropzone input[type=file]').setInputFiles(sources);
+    await modal(page).locator('.apply-all select').selectOption('Commercial Invoice');
+    const first = modal(page).locator('.stage-row').first();
+    await first.getByLabel('Category').selectOption('Packing List');
+    await first.getByLabel('Reference No.').fill('INV-UP-1');
+    await first.locator('.tag-input input').fill('Urgent');
+    await first.locator('.tag-input input').press('Enter');
+    device.writes = [];
+    device.slow = 60;
+    await modal(page).getByRole('button', { name: 'Upload 20 files' }).click();
+    await modal(page).getByRole('button', { name: /Uploading \d+%/ }).waitFor();
+    await modal(page).waitFor({ state: 'detached', timeout: 20_000 });
+    device.slow = 0;
+    await until(() => docsOf('CT-UP').length === 20, '20 documents in the folder copy');
+    const docs = docsOf('CT-UP');
+    upId = docs[0].contract_id;
+    for (const d of docs) {
+      assert.match(d.storage_name, /^[0-9a-f-]{36}\.(pdf|png|xlsx|csv)$/);
+      assert.equal(d.file_path, `files/${d.storage_name}`);
+      assert.deepEqual(fs.readFileSync(path.join(DEFAULT_DIR, d.file_path)), fs.readFileSync(path.join(up, d.original_name)), d.original_name);
+    }
+    assert.deepEqual(docs.map((d) => d.file_type).sort(), [...Array(6).fill('excel'), ...Array(7).fill('image'), ...Array(7).fill('pdf')]);
+    const [one] = folderDb(DEFAULT_DIR, `SELECT d.category, d.reference_no, (SELECT group_concat(t.name) FROM document_tags dt JOIN tags t ON t.id = dt.tag_id WHERE dt.document_id = d.id) AS tags FROM documents d WHERE original_name = 'contract-1.pdf'`);
+    assert.deepEqual({ ...one }, { category: 'Packing List', reference_no: 'INV-UP-1', tags: 'Urgent' });
+    assert.equal(docs.filter((d) => d.category === 'Commercial Invoice').length, 19);
+    const big = docs.find((d) => d.original_name === 'scan-big.pdf');
+    const pieces = device.writes.filter((w) => w.name === big.file_path);
+    assert.deepEqual(pieces.map((w) => [w.size, w.append]), [[PIECE, false], [PIECE, true], [12345, true]]);
+    assert.ok(device.writes.every((w) => w.size <= PIECE));
+  });
+
+  await check('images preview inside the app; PDFs and Excel open in the phone\'s own apps; save to Downloads and share', async () => {
+    const { page } = app;
+    const stored = (name) => docsOf('CT-UP').find((d) => d.original_name === name);
+    await page.goto(`${BASE}#/contracts/${upId}`);
+    let d = await openDrawer(page, 'photo-3');
+    assert.ok(await d.locator('.preview img').evaluate(async (img) => (await img.decode(), img.naturalWidth === 2)));
+
+    d = await openDrawer(page, 'contract-2');
+    await d.getByRole('button', { name: 'Open PDF' }).click();
+    await until(() => device.opened, 'PDF handed to the phone');
+    assert.equal(device.opened.contentType, 'application/pdf');
+    assert.equal(device.opened.filePath, `file://${PHONE_ROOT}/Documents/Contract%20Desk/${stored('contract-2.pdf').file_path}`);
+    assert.deepEqual(device.opened.bytes, fs.readFileSync(path.join(up, 'contract-2.pdf')));
+
+    await d.getByRole('button', { name: 'Save to Downloads' }).click();
+    await d.getByText('Saved to Downloads as contract-2.pdf').waitFor();
+    assert.deepEqual(fs.readFileSync(path.join(storage, 'Download', 'contract-2.pdf')), fs.readFileSync(path.join(up, 'contract-2.pdf')));
+    await d.getByRole('button', { name: 'Share' }).click();
+    await until(() => device.shared, 'shared');
+    assert.equal(device.shared.as, 'contract-2.pdf');
+    assert.equal(device.shared.mime, 'application/pdf');
+    assert.deepEqual(device.shared.bytes, fs.readFileSync(path.join(up, 'contract-2.pdf')));
+
+    device.opened = null;
+    d = await openDrawer(page, 'sheet-4');
+    await d.getByRole('button', { name: 'Open XLSX' }).click();
+    await until(() => device.opened, 'spreadsheet handed to the phone');
+    assert.equal(device.opened.contentType, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    assert.deepEqual(device.opened.bytes, fs.readFileSync(path.join(up, 'sheet-4.xlsx')));
+    await d.getByRole('button', { name: 'Close document' }).click();
+  });
+
+  await check('"Take photo" in the upload dialog opens the camera (capture input), and the photo is filed as a document', async () => {
+    const { page } = app;
+    await openUpload(page);
+    await modal(page).getByRole('button', { name: 'Take photo' }).waitFor();
+    const camera = modal(page).locator('input[capture]');
+    assert.equal(await camera.getAttribute('accept'), 'image/*');
+    assert.equal(await camera.getAttribute('capture'), 'environment');
+    await camera.setInputFiles(src('JPEG_20261021_101500_123.jpg', PNG)); // the name Capacitor gives a camera photo
+    await modal(page).locator('.apply-all select').selectOption('Other Documents');
+    await modal(page).getByRole('button', { name: 'Upload 1 file' }).click();
+    await modal(page).waitFor({ state: 'detached' });
+    await until(() => docsOf('CT-UP').some((d) => d.original_name === 'JPEG_20261021_101500_123.jpg' && d.file_type === 'image'), 'the photo filed');
+  });
+
+  await check('a file over 500 MB gets a clear message, and nothing is written', async () => {
+    const { page } = app;
+    const huge = path.join(up, 'huge.pdf');
+    fs.closeSync(fs.openSync(huge, 'w'));
+    fs.truncateSync(huge, 501 * 1024 * 1024); // sparse: takes no disk space
+    const before = fs.readdirSync(filesDir).sort();
+    device.writes = [];
+    await openUpload(page);
+    await modal(page).locator('.dropzone input[type=file]').setInputFiles([sources[0], huge]);
+    await modal(page).locator('.apply-all select').selectOption('Other Documents');
+    await modal(page).getByRole('button', { name: 'Upload 2 files' }).click();
+    await modal(page).getByText('"huge.pdf" is 501 MB; one file can be at most 500 MB. Nothing was saved').waitFor();
+    assert.equal(device.writes.length, 0);
+    assert.deepEqual(fs.readdirSync(filesDir).sort(), before);
+    await modal(page).getByRole('button', { name: 'Cancel' }).click();
+  });
+
+  await check('a failed upload leaves no record and no stray file (phone storage full; a file type the rules refuse)', async () => {
+    const { page } = app;
+    const before = fs.readdirSync(filesDir).sort();
+    const count = docsOf('CT-UP').length;
+    for (const [files, failWrite, message] of [
+      [[sources[0], sources[6]], 3, 'Could not save "scan-big.pdf"'], // the 2nd piece of the 2nd file fails
+      [[sources[1], src('notes.txt', 'hello')], 0, '"notes.txt" is not a PDF, image or Excel file'],
+    ]) {
+      await openUpload(page);
+      await modal(page).locator('.dropzone input[type=file]').setInputFiles(files);
+      await modal(page).locator('.apply-all select').selectOption('Other Documents');
+      device.failWrite = failWrite;
+      await modal(page).getByRole('button', { name: 'Upload 2 files' }).click();
+      await modal(page).getByText(message).waitFor();
+      await modal(page).getByText('Nothing was saved').waitFor();
+      device.failWrite = 0;
+      await until(() => JSON.stringify(fs.readdirSync(filesDir).sort()) === JSON.stringify(before), 'no stray files left');
+      await modal(page).getByRole('button', { name: 'Cancel' }).click();
+    }
+    await page.reload();
+    await page.getByRole('heading', { name: 'CT-UP' }).waitFor();
+    assert.equal(await page.locator('.doc-row').count(), count);
+    assert.equal(docsOf('CT-UP').length, count);
+  });
+
+  await check('deleting one document removes only its file; the others stay intact', async () => {
+    const { page } = app;
+    const docs = docsOf('CT-UP');
+    const gone = docs.find((d) => d.original_name === 'contract-3.pdf');
+    const others = Object.fromEntries(fs.readdirSync(filesDir).filter((n) => n !== gone.storage_name).map((n) => [n, fs.readFileSync(path.join(filesDir, n))]));
+    const d = await openDrawer(page, 'contract-3');
+    await d.getByRole('button', { name: 'Delete' }).click();
+    await page.locator('.modal').getByRole('button', { name: 'Delete' }).click();
+    await until(() => !fs.existsSync(path.join(filesDir, gone.storage_name)), 'its file removed');
+    await until(() => docsOf('CT-UP').length === docs.length - 1, 'its record removed from the folder copy');
+    assert.deepEqual(Object.fromEntries(fs.readdirSync(filesDir).map((n) => [n, fs.readFileSync(path.join(filesDir, n))])), others);
+    await quit();
+  });
+
+  await check('on start, files no record points to are removed (only names the app makes); the owner\'s own files stay', async () => {
+    const stray = path.join(filesDir, `${randomUUID()}.pdf`); // e.g. left by a crash mid-upload
+    const own = path.join(filesDir, 'my notes.pdf');
+    fs.writeFileSync(stray, 'half an upload');
+    fs.writeFileSync(own, 'mine');
+    const page = await launch('install-1');
+    await page.locator('#q').waitFor();
+    await until(() => !fs.existsSync(stray), 'stray file removed');
+    assert.ok(fs.existsSync(own));
+    fs.rmSync(own);
+    // Tidy up for the checks below: deleting the contract removes all its files.
+    await page.goto(`${BASE}#/contracts/${upId}`);
+    await page.locator('.record-head').getByRole('button', { name: 'Delete' }).click();
+    await page.getByRole('button', { name: /^Delete contract and \d+ documents$/ }).click();
+    await page.waitForURL(/#\/contracts$/);
+    await until(() => fs.readdirSync(filesDir).length === 1 && !contractNos(DEFAULT_DIR).includes('CT-UP'), 'CT-UP and its files gone');
+    await quit();
+  });
+
   await check('start-up recovers a newer, healthy contracts.db.tmp left by a crash mid-save', async () => {
     const db = path.join(DEFAULT_DIR, 'contracts.db');
     fs.renameSync(db, `${db}.tmp`); // the picker-mode crash window: old file deleted, .tmp not yet renamed
@@ -336,6 +544,36 @@ try {
     await page.getByRole('heading', { name: 'CT-PICK' }).waitFor();
     await until(() => contractNos(DEFAULT_DIR).includes('CT-PICK'), 'CT-PICK saved through the picker link');
     assert.deepEqual(indentNos(DEFAULT_DIR), ['IND-DESK']); // IND-7 went when the desktop folder replaced the phone's (the folder copy wins)
+  });
+
+  await check('picker mode: upload in 4 MB pieces through the picker link; image preview, open PDF, save and share work', async () => {
+    const { page } = app;
+    const tree = treeOf('Documents/Contract Desk');
+    await openUpload(page);
+    await modal(page).locator('.dropzone input[type=file]').setInputFiles([sources[6], sources[7]]); // scan-big.pdf, photo-1.png
+    await modal(page).locator('.apply-all select').selectOption('Other Documents');
+    device.writes = [];
+    await modal(page).getByRole('button', { name: 'Upload 2 files' }).click();
+    await modal(page).waitFor({ state: 'detached' });
+    await until(() => docsOf('CT-PICK').length === 2, 'both in the folder copy');
+    const [pdf, png] = docsOf('CT-PICK');
+    assert.deepEqual(device.writes.map((w) => [w.name, w.size]), [[pdf.file_path, PIECE], [pdf.file_path, PIECE], [pdf.file_path, 12345], [png.file_path, PNG.length]]);
+    assert.deepEqual(fs.readFileSync(path.join(DEFAULT_DIR, pdf.file_path)), fs.readFileSync(sources[6]));
+    let d = await openDrawer(page, 'photo-1');
+    assert.ok(await d.locator('.preview img').evaluate(async (img) => (await img.decode(), img.naturalWidth === 2)));
+    assert.ok((await d.locator('.preview img').getAttribute('src')).includes(encodeURIComponent(`${tree}/document/`)));
+    device.opened = device.shared = null;
+    d = await openDrawer(page, 'scan-big');
+    await d.getByRole('button', { name: 'Open PDF' }).click();
+    await until(() => device.opened, 'PDF handed to the phone');
+    assert.equal(device.opened.filePath, `${tree}/document/${encodeURIComponent(`primary:Documents/Contract Desk/${pdf.file_path}`)}`);
+    assert.deepEqual(device.opened.bytes, fs.readFileSync(sources[6]));
+    await d.getByRole('button', { name: 'Save to Downloads' }).click();
+    await d.getByText('Saved to Downloads as scan-big.pdf').waitFor();
+    await d.getByRole('button', { name: 'Share' }).click();
+    await until(() => device.shared?.as === 'scan-big.pdf', 'shared');
+    assert.ok(device.writes.every((w) => w.folder === tree) && device.shared.folder === tree, 'all through the picker link');
+    await d.getByRole('button', { name: 'Close document' }).click();
   });
 
   await check('choose an empty folder: "Move my records here?" copies the records and files; the old folder stays', async () => {

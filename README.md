@@ -50,7 +50,7 @@ npm start              # http://127.0.0.1:4780   (settings: copy .env.example to
 | --- | --- |
 | `npm run dev` | Server with auto-restart + Vite dev server |
 | `npm run app` | Run the desktop app without packaging |
-| `npm test` | API acceptance checks, run twice: with the desktop database and with the phone's (SQLite WebAssembly); then the Android app's web bundle in Chromium (phone database, data folder, start-up copy rules) |
+| `npm test` | API acceptance checks, run twice: with the desktop database and with the phone's (SQLite WebAssembly); then the Android app's web bundle in Chromium (phone database, data folder, start-up copy rules, uploads and files) |
 | `npm run test:e2e` | Browser UI tests: desktop, phone, Wi-Fi, desktop app (run `npm run build` first) |
 | `npm run dist:linux` | Build the Linux AppImage into `release/` |
 | `npm run demo:video` | Re-record the walkthrough video |
@@ -68,6 +68,7 @@ npm start              # http://127.0.0.1:4780   (settings: copy .env.example to
 - `electron/`: desktop app.
 - `android/`: Android app (Capacitor). Same screens; a database worker (`client/src/phone-worker.js`) answers instead of the
   server, and `client/src/phone.js` keeps its saved copy in the data folder (default `Documents/Contract Desk`).
+  Uploads go straight to that folder's `files/`; PDFs and spreadsheets open in the phone's own apps.
 - `test/`: API and UI tests.
 
 Don't put your own files in the data folder's `files/` subfolder: at startup the app removes files there that no record points to.

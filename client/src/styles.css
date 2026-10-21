@@ -1514,6 +1514,11 @@ a.tr:hover {
   font-size: 12.5px;
   margin-top: 2px;
 }
+.camera-btn {
+  width: 100%;
+  justify-content: center;
+  margin-top: 10px;
+}
 .apply-all {
   display: flex;
   align-items: center;
@@ -1661,6 +1666,11 @@ a.tr:hover {
   gap: 8px;
   padding: 14px 22px;
   flex-wrap: wrap;
+}
+.drawer-note {
+  margin: -6px 16px 0;
+  font-size: 13px;
+  color: var(--ink-2);
 }
 .drawer-form {
   display: flex;

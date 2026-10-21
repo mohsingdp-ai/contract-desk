@@ -873,11 +873,9 @@ function DocGroup({ title, docs, onAdd, onOpenDoc, onDelete }) {
         <h3>{title}</h3>
         <span className="mono dim">{docs.length}</span>
         <span className="spacer" />
-        {!isPhone && (
-          <button className="btn btn-sm" onClick={onAdd}>
-            <Icon name="plus" size={14} /> Add
-          </button>
-        )}
+        <button className="btn btn-sm" onClick={onAdd}>
+          <Icon name="plus" size={14} /> Add
+        </button>
       </header>
       {docs.length > 0 && (
         <ul className="doc-list">
@@ -924,11 +922,9 @@ function ContractDetail({ id, go, meta, facets, version, bump, openDoc, tagNames
           <h1 className="ident-xl">{c.contract_no}</h1>
         </div>
         <div className="page-actions">
-          {!isPhone && (
-            <button className="btn btn-primary" onClick={() => setModal({ upload: '' })}>
-              <Icon name="upload" /> Add documents
-            </button>
-          )}
+          <button className="btn btn-primary" onClick={() => setModal({ upload: '' })}>
+            <Icon name="upload" /> Add documents
+          </button>
           <button className="btn" onClick={() => setModal({ edit: true })}>
             <Icon name="edit" /> Edit
           </button>
@@ -1273,11 +1269,9 @@ function NocDetail({ id, go, version, bump, openDoc, tagNames, meta }) {
           <h1 className="ident-xl">{n.indent_no}</h1>
         </div>
         <div className="page-actions">
-          {!isPhone && (
-            <button className="btn btn-primary" onClick={() => setModal({ upload: true })}>
-              <Icon name="upload" /> Add documents
-            </button>
-          )}
+          <button className="btn btn-primary" onClick={() => setModal({ upload: true })}>
+            <Icon name="upload" /> Add documents
+          </button>
           <button className="btn" onClick={() => setModal({ edit: true })}>
             <Icon name="edit" /> Edit
           </button>

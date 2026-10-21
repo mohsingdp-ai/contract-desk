@@ -40,4 +40,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- All files access: the data folder in Documents survives uninstall (decision-2) -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+    <!-- "Take photo" in the upload dialog: lets the WebView find the camera app (Android 11+ hides other apps otherwise) -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+    </queries>
 </manifest>

@@ -1,16 +1,20 @@
 package com.contractdesk.app;
 
 import android.app.Activity;
+import android.content.ClipData;
 import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.DocumentsContract.Document;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.util.Base64;
 import androidx.activity.result.ActivityResult;
+import androidx.core.content.FileProvider;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -267,12 +271,73 @@ public class FolderPlugin extends Plugin {
     public void copy(PluginCall call) {
         String name = call.getString("name");
         try (InputStream in = openIn(call.getString("from"), name); OutputStream out = openOut(call.getString("to"), name, false)) {
-            byte[] buf = new byte[1 << 16];
-            long total = 0;
-            for (int n; (n = in.read(buf)) > 0; total += n) out.write(buf, 0, n);
             JSObject r = new JSObject();
-            r.put("bytes", total);
+            r.put("bytes", pump(in, out));
             call.resolve(r);
+        } catch (Exception e) {
+            call.reject(e.getMessage(), e);
+        }
+    }
+
+    private static long pump(InputStream in, OutputStream out) throws IOException {
+        byte[] buf = new byte[1 << 16];
+        long total = 0;
+        for (int n; (n = in.read(buf)) > 0; total += n) out.write(buf, 0, n);
+        return total;
+    }
+
+    // ---------- a stored document for the phone's own apps ----------
+
+    // A copy of a stored file in the phone's Downloads, named "as" (Android adds " (1)" on a clash). MediaStore needs no
+    // permission; the copy stays hidden until it is complete and is removed if copying fails. Returns the name it got.
+    @PluginMethod
+    public void saveToDownloads(PluginCall call) {
+        Uri item = null;
+        try {
+            ContentValues v = new ContentValues();
+            v.put(MediaStore.MediaColumns.DISPLAY_NAME, call.getString("as"));
+            v.put(MediaStore.MediaColumns.MIME_TYPE, call.getString("mime"));
+            v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+            item = cr().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+            if (item == null) throw new IOException("Downloads is not available");
+            try (InputStream in = openIn(call.getString("folder"), call.getString("name")); OutputStream out = cr().openOutputStream(item)) {
+                if (out == null) throw new IOException("Could not write to Downloads");
+                pump(in, out);
+            }
+            v.clear();
+            v.put(MediaStore.MediaColumns.IS_PENDING, 0);
+            cr().update(item, v, null, null);
+            JSObject r = new JSObject();
+            try (Cursor c = cr().query(item, new String[] { MediaStore.MediaColumns.DISPLAY_NAME }, null, null, null)) {
+                r.put("name", c != null && c.moveToFirst() ? c.getString(0) : call.getString("as"));
+            }
+            call.resolve(r);
+        } catch (Exception e) {
+            if (item != null) cr().delete(item, null, null);
+            call.reject(e.getMessage(), e);
+        }
+    }
+
+    // The system share sheet. The file goes as a copy named "as" in the app's cache, so the receiving app shows the
+    // document's name rather than the stored random one. Each share replaces the previous copy.
+    // ponytail: the last shared copy stays in the cache until the next share (or Android clears it); fine below 500 MB.
+    @PluginMethod
+    public void share(PluginCall call) {
+        File dir = new File(getContext().getCacheDir(), "shared");
+        try {
+            File[] old = dir.listFiles();
+            if (old != null) for (File f : old) f.delete();
+            if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("Could not create " + dir.getPath());
+            File copy = new File(dir, call.getString("as"));
+            try (InputStream in = openIn(call.getString("folder"), call.getString("name")); OutputStream out = new FileOutputStream(copy)) {
+                pump(in, out);
+            }
+            Uri uri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", copy);
+            Intent send = new Intent(Intent.ACTION_SEND).setType(call.getString("mime")).putExtra(Intent.EXTRA_STREAM, uri);
+            send.setClipData(ClipData.newRawUri("", uri));
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            getActivity().startActivity(Intent.createChooser(send, null));
+            call.resolve();
         } catch (Exception e) {
             call.reject(e.getMessage(), e);
         }
