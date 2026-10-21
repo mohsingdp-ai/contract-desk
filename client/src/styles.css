@@ -395,35 +395,6 @@ mark {
   gap: 6px;
   font-size: 12px;
 }
-.rail-foot code {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--rail-ink);
-  word-break: break-all;
-  opacity: 0.85;
-}
-.rail-folder {
-  display: flex;
-  gap: 6px;
-  margin: 2px 0 4px;
-}
-.rail-folder button,
-.rail-folder a {
-  display: inline-flex;
-  align-items: center;
-  text-decoration: none;
-  min-height: 30px;
-  padding: 0 10px;
-  border: 1px solid #ffffff33;
-  background: none;
-  color: var(--rail-ink);
-  font-size: 12px;
-  cursor: pointer;
-}
-.rail-folder a:hover,
-.rail-folder button:hover {
-  border-color: var(--rail-ink);
-}
 .backup-reminder {
   display: flex;
   flex-wrap: wrap;
@@ -434,19 +405,40 @@ mark {
   border: 1px solid var(--signal);
   font-size: 13.5px;
 }
-.phone-folder {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  margin-top: 40px;
-  padding-top: 16px;
-  border-top: 1px solid var(--rule);
+
+/* ---------- settings ---------- */
+
+.settings {
+  max-width: 820px;
 }
-.phone-folder code {
-  font-family: var(--mono);
-  font-size: 12px;
+.setting {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px 24px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.setting-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.setting-body p {
+  margin: 0;
+  max-width: 60ch;
   color: var(--ink-2);
+}
+.setting-body .row-gap {
+  justify-content: flex-start;
+}
+.setting-path {
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 6px 10px;
+  background: var(--sheet-2);
   word-break: break-all;
 }
 .phone-space,
@@ -456,6 +448,7 @@ mark {
   font-size: 13px;
 }
 .phone-lock {
+  min-height: 44px; /* the whole line is the switch's tap target */
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1924,8 +1917,28 @@ a.tr:hover {
   }
   .rail-stat,
   .rail-foot,
-  .rail-nav kbd {
+  .rail-nav kbd,
+  .rail-settings span {
     display: none;
+  }
+  .rail-nav {
+    flex: 1;
+  }
+  .rail-nav .rail-settings {
+    min-width: 44px;
+    margin-left: auto;
+    justify-content: center;
+    align-items: center;
+  }
+  .rail-theme {
+    display: none; /* on Settings: four tabs fill a phone's top bar */
+  }
+  .rail-settings .icon {
+    width: 20px;
+    height: 20px;
+  }
+  .setting {
+    grid-template-columns: minmax(0, 1fr);
   }
   .page {
     padding: 22px 16px 60px;
@@ -2007,6 +2020,13 @@ a.tr:hover {
   }
   .apply-all {
     flex-wrap: wrap;
+  }
+}
+
+/* Phones: no room for the counts in the top bar (each list shows its count on its own page). */
+@media (max-width: 440px) {
+  .rail-nav .count {
+    display: none;
   }
 }
 

@@ -47,6 +47,8 @@ async function say(win, text, ms = 2200) {
   }, text);
   await beat(ms);
 }
+// Data folder and backup are on Settings (sidebar).
+const toSettings = (win) => win.getByRole('link', { name: 'Settings' }).click();
 const menu = (app) =>
   app.evaluate(({ Menu }) => Menu.getApplicationMenu().items.map((i) => ({ label: i.label, items: i.submenu.items.map((s) => s.label).filter(Boolean) })));
 
@@ -129,13 +131,16 @@ const contractCount = (dir) => {
   return n;
 };
 
-test('change the data folder from the sidebar and move the records there; old folder untouched', async () => {
+test('change the data folder from Settings and move the records there; old folder untouched', async () => {
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ dataDir }));
   const moved = path.join(root, 'moved-here');
   let app = await launch();
   let win = await sized(app);
+  await toSettings(win);
+  await expect(win.locator('.setting-path')).toHaveText(dataDir);
+  await expect(win.getByRole('button', { name: 'Open', exact: true })).toBeVisible();
   await expect(win.getByRole('button', { name: 'Change…' })).toBeVisible();
-  await say(win, 'Data folder: the sidebar now has Open and Change… (bottom left)', 2600);
+  await say(win, 'Data folder: Settings (sidebar) has Open and Change…', 2600);
   await win.getByRole('button', { name: 'Change…' }).hover();
   await say(win, 'Clicking Change… · the folder picker is answered with “moved-here”, then “Move my records there”', 3000);
   await answer(app, moved, 0); // "Move my records there"
@@ -146,8 +151,10 @@ test('change the data folder from the sidebar and move the records there; old fo
 
   app = await launch();
   win = await sized(app);
-  await expect(win.locator('.rail-foot code')).toHaveText(moved);
-  await say(win, 'After the restart: the data folder is now “moved-here” (bottom left)', 2800);
+  await toSettings(win);
+  await expect(win.locator('.setting-path')).toHaveText(moved);
+  await say(win, 'After the restart: the data folder is now “moved-here”', 2800);
+  await win.getByRole('link', { name: 'Search' }).click();
   await win.locator('#q').fill('DESK-001');
   await expect(win.locator('a.tr').filter({ hasText: 'DESK-001' })).toBeVisible();
   await say(win, 'DESK-001 came along. The old folder is checked too: still intact', 2800);
@@ -160,6 +167,7 @@ test('change the data folder from the sidebar and move the records there; old fo
 test('choosing a folder that already has records opens them', async () => {
   const app = await launch();
   const win = await sized(app);
+  await toSettings(win);
   await say(win, 'Change… again · picking the original folder, which already has records → “Open these records”', 3000);
   await answer(app, dataDir, 0); // "Open these records"
   const closed = app.waitForEvent('close');
@@ -174,7 +182,8 @@ test('a move that cannot finish leaves everything as it was', async () => {
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ dataDir: path.join(root, 'moved-here'), moveFrom: dataDir }));
   const app = await launch();
   const win = await sized(app);
-  await expect(win.locator('.rail-foot code')).toHaveText(dataDir);
+  await toSettings(win);
+  await expect(win.locator('.setting-path')).toHaveText(dataDir);
   await say(win, 'A move into a folder that already has a database is refused: still using the original folder, nothing overwritten', 3200);
   expect(settings()).toMatchObject({ dataDir });
   expect(settings().moveFrom).toBeUndefined();
@@ -199,16 +208,19 @@ test('a backup counts for the reminder only once its file is saved, not when the
   const before = await lastBackup();
   const reminder = win.getByRole('status').filter({ hasText: 'No backup yet.' });
   await expect(reminder).toBeVisible();
+  await toSettings(win);
   await answerSave(null);
-  await win.locator('.rail-foot').getByRole('link', { name: 'Back up…' }).click();
+  await win.locator('.settings').getByRole('link', { name: 'Back up now' }).click();
   await finished();
   expect(await app.evaluate(() => global.__download)).toBe('cancelled');
   expect(await lastBackup()).toBe(before);
   await win.waitForTimeout(2500); // past the page's own re-check
-  await expect(reminder).toBeVisible(); // cancelled: still reminded
+  await expect(win.getByText(/^Not backed up yet\./)).toBeVisible(); // cancelled: still not backed up…
+  await win.getByRole('link', { name: 'Search' }).click();
+  await expect(reminder).toBeVisible(); // …and still reminded
   const file = path.join(root, 'saved-backup.tar');
   await answerSave(file);
-  await win.locator('.rail-foot').getByRole('link', { name: 'Back up…' }).click();
+  await reminder.getByRole('link', { name: 'Back up now' }).click(); // the reminder's own button, the same download
   await finished();
   expect(await app.evaluate(() => global.__download)).toBe('completed');
   expect(fs.statSync(file).size).toBeGreaterThan(1024);

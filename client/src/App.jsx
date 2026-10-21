@@ -132,7 +132,7 @@ function Desk() {
 
   return (
     <div className="shell">
-      <Rail section={section} facets={facets} meta={meta} onBackup={onBackup} />
+      <Rail section={section} facets={facets} meta={meta} />
       <main className="main" key={route.path}>
         {!section && <SearchPage {...ctx} />}
         {section === 'contracts' && !id && <ContractsPage {...ctx} />}
@@ -140,6 +140,7 @@ function Desk() {
         {section === 'nocs' && !id && <NocsPage {...ctx} />}
         {section === 'nocs' && id && <NocDetail {...ctx} id={id} />}
         {section === 'categories' && <CategoriesPage {...ctx} />}
+        {section === 'settings' && <SettingsPage {...ctx} />}
       </main>
       {doc && (
         <DocDrawer id={doc} meta={meta} tagSuggestions={ctx.tagNames} onClose={() => go(route.path, params)} onChanged={bump} onOpenParent={ctx.openParent} />
@@ -353,21 +354,27 @@ function ConnectPhone() {
 }
 
 // Light/dark switch. Starts from the system setting; the choice is remembered on this device only.
-function ThemeSwitch() {
-  const systemDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || (systemDark() ? 'dark' : 'light'));
+// In the sidebar, and on Settings (the phone's top bar has no room for it); a flip in one updates the other.
+const currentTheme = () => document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+function ThemeSwitch({ inRail }) {
+  const [theme, setTheme] = useState(currentTheme);
+  useEffect(() => {
+    const on = () => setTheme(currentTheme());
+    window.addEventListener('themechange', on);
+    return () => window.removeEventListener('themechange', on);
+  }, []);
   const next = theme === 'dark' ? 'light' : 'dark';
   const flip = () => {
     document.documentElement.dataset.theme = next;
     try {
       localStorage.setItem('theme', next);
     } catch {}
-    setTheme(next);
+    window.dispatchEvent(new Event('themechange'));
   };
   return (
-    <button className="rail-theme" onClick={flip} aria-label={`Switch to ${next} theme`} title={`Switch to ${next} theme`}>
+    <button className={inRail ? 'rail-theme' : 'btn btn-sm'} onClick={flip} aria-label={`Switch to ${next} theme`} title={`Switch to ${next} theme`}>
       <Icon name={next === 'dark' ? 'moon' : 'sun'} />
-      <span className="rail-theme-label">{next === 'dark' ? 'Dark theme' : 'Light theme'}</span>
+      <span className={inRail ? 'rail-theme-label' : undefined}>{next === 'dark' ? 'Dark theme' : 'Light theme'}</span>
     </button>
   );
 }
@@ -376,7 +383,7 @@ function ThemeSwitch() {
 
 // Desktop: a download (the desktop app asks where to save it). Phone: built in pieces, saved to Downloads, then the share
 // menu opens so it can go to Drive, email or a computer.
-function BackupButton({ onBackup, className, label = 'Back up…' }) {
+function BackupButton({ onBackup, className, label = 'Back up now' }) {
   const [busy, setBusy] = useState(null);
   const [saved, setSaved] = useState('');
   if (!isPhone)
@@ -498,7 +505,7 @@ function BackupReminder({ meta, facets, onBackup }) {
         {days === null ? 'No backup yet.' : `Last backup ${days} days ago.`} Keep a copy somewhere else, so your records survive a lost or broken{' '}
         {isPhone ? 'phone' : 'computer'}.
       </span>
-      <BackupButton className="btn btn-sm" label="Back up now" onBackup={onBackup} />
+      <BackupButton className="btn btn-sm" onBackup={onBackup} />
     </p>
   );
 }
@@ -506,7 +513,7 @@ function BackupReminder({ meta, facets, onBackup }) {
 // Phone: switch the data folder with the system folder picker (decision-2), then reload the desk from it.
 const changePhoneFolder = () => phone.chooseFolder().then((changed) => changed && location.reload(), (err) => alert(err.message));
 
-function Rail({ section, facets, meta, onBackup }) {
+function Rail({ section, facets, meta }) {
   const n = (v) => v.toLocaleString();
   return (
     <aside className="rail">
@@ -531,35 +538,21 @@ function Rail({ section, facets, meta, onBackup }) {
           <span>NOCs</span>
           <span className="count">{n(facets.counts.nocs)}</span>
         </a>
+        {/* Phones show only the gear: four labels don't fit the top bar. */}
+        <a href="#/settings" className={`rail-settings ${section === 'settings' ? 'is-active' : ''}`} aria-label="Settings">
+          <span>Settings</span>
+          <Icon name="gear" />
+        </a>
       </nav>
       {meta.lan && meta.onThisComputer && <ConnectPhone />}
       <a className={`rail-sub ${section === 'categories' ? 'is-active' : ''}`} href="#/categories">
         <Icon name="edit" /> Document categories
       </a>
-      <ThemeSwitch />
+      <ThemeSwitch inRail />
       <p className="rail-stat">
         <span className="mono">{n(facets.counts.documents)}</span> documents filed
       </p>
       <div className="rail-foot">
-        <span className="kicker">Data folder</span>
-        <code title={meta.dataDir}>{meta.dataDir}</code>
-        {/* Only inside the desktop app (its preload adds window.desktop); never on phones or in a browser. */}
-        {window.desktop && (
-          <span className="rail-folder">
-            <button onClick={() => window.desktop.openDataFolder()}>Open</button>
-            <button onClick={() => window.desktop.chooseDataFolder()}>Change…</button>
-          </span>
-        )}
-        {isPhone && (
-          <span className="rail-folder">
-            <button onClick={changePhoneFolder}>Change…</button>
-          </span>
-        )}
-        <span className="kicker">Backup</span>
-        <span className="rail-folder">
-          <BackupButton onBackup={onBackup} />
-          <RestoreButton meta={meta} />
-        </span>
         <span className="rail-local">{meta.lan ? 'Wi-Fi access on · passcode' : 'Local only · offline'}</span>
       </div>
     </aside>
@@ -820,6 +813,7 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent, onB
   return (
     <div className="page page-search">
       <BackupReminder meta={meta} facets={facets} onBackup={onBackup} />
+      {isPhone && <PhoneSpace warnOnly version={version} />}
       <div className="search-hero">
         <label className="sr-only" htmlFor="q">
           Search everything filed
@@ -898,22 +892,86 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent, onB
           ))}
         </div>
       )}
-      {/* Phones hide the sidebar footer, so the data folder control sits here. */}
-      {isPhone && (
-        <footer className="phone-folder">
-          <span className="kicker">Data folder</span>
-          <code>{meta.dataDir}</code>
-          <button className="btn btn-sm" onClick={changePhoneFolder}>
-            Change folder…
-          </button>
-          <PhoneSpace version={version} />
-          <span className="row-gap">
-            <BackupButton className="btn btn-sm" onBackup={onBackup} />
-            <RestoreButton meta={meta} className="btn btn-sm" />
-          </span>
-          <LockSetting />
-        </footer>
-      )}
+    </div>
+  );
+}
+
+// ---------- settings ----------
+
+function SettingsPage({ meta, version, onBackup }) {
+  return (
+    <div className="page">
+      <PageHead title="Settings" />
+      <div className="settings">
+        <section className="setting">
+          <h2 className="section-label">Data folder</h2>
+          <div className="setting-body">
+            <p>Your records and their files are kept here.</p>
+            <code className="setting-path">{meta.dataDir}</code>
+            {/* Only inside the desktop app (its preload adds window.desktop); never on phones or in a browser. */}
+            {window.desktop && (
+              <span className="row-gap">
+                <button className="btn btn-sm" onClick={() => window.desktop.openDataFolder()}>
+                  Open
+                </button>
+                <button className="btn btn-sm" onClick={() => window.desktop.chooseDataFolder()}>
+                  Change…
+                </button>
+              </span>
+            )}
+            {isPhone && (
+              <button className="btn btn-sm" onClick={changePhoneFolder}>
+                Change folder…
+              </button>
+            )}
+          </div>
+        </section>
+        {isPhone && (
+          <section className="setting">
+            <h2 className="section-label">Storage</h2>
+            <div className="setting-body">
+              <PhoneSpace version={version} />
+            </div>
+          </section>
+        )}
+        <section className="setting">
+          <h2 className="section-label">Backup</h2>
+          <div className="setting-body">
+            <p>
+              {meta.lastBackup ? `Last backup ${fmtDate(meta.lastBackup)}.` : 'Not backed up yet.'} A backup is one file with every record and document. Keep it somewhere
+              else, so your records survive a lost or broken {isPhone ? 'phone' : 'computer'}.
+            </p>
+            <span className="row-gap">
+              <BackupButton className="btn btn-sm" onBackup={onBackup} />
+              <RestoreButton meta={meta} className="btn btn-sm" />
+            </span>
+            {!isPhone && !meta.onThisComputer && <p className="dim">Restore works only on the computer that runs Contract Desk.</p>}
+          </div>
+        </section>
+        <section className="setting">
+          <h2 className="section-label">Theme</h2>
+          <div className="setting-body">
+            <ThemeSwitch />
+          </div>
+        </section>
+        {isPhone && (
+          <section className="setting">
+            <h2 className="section-label">Lock</h2>
+            <div className="setting-body">
+              <LockSetting />
+            </div>
+          </section>
+        )}
+        <section className="setting">
+          <h2 className="section-label">Categories</h2>
+          <div className="setting-body">
+            <p>The document types every contract is filed by.</p>
+            <a className="btn btn-sm" href="#/categories">
+              <Icon name="edit" /> Document categories
+            </a>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }

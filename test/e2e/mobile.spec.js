@@ -99,6 +99,20 @@ test('search on a phone finds the document and opens its parent', async ({ page 
   await expect(page.getByRole('heading', { level: 1, name: 'MOB-001' })).toBeVisible();
 });
 
+test('Settings from the gear in the top bar: fits the phone, finger-sized', async ({ page }) => {
+  await page.goto('/#/');
+  const gear = page.locator('.rail-nav').getByRole('link', { name: 'Settings' });
+  const box = await gear.boundingBox();
+  expect(box.width).toBeGreaterThanOrEqual(44);
+  expect(box.height).toBeGreaterThanOrEqual(44);
+  await gear.tap();
+  await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Back up now' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Switch to (dark|light) theme/ })).toBeVisible();
+  expect(await noSidewaysScroll(page)).toBeLessThanOrEqual(0);
+  expect(await smallTargets(page, '.main')).toEqual([]);
+});
+
 test('delete confirmation is usable on a phone', async ({ page }) => {
   await page.goto(`/#/contracts/${contractId}`);
   await page.getByRole('button', { name: 'Delete' }).first().tap();
