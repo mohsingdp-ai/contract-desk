@@ -4,6 +4,12 @@ apply plugin: 'com.android.application'
 def appVersion = new groovy.json.JsonSlurper().parse(file('../../package.json')).version
 def (vMajor, vMinor, vPatch) = appVersion.tokenize('.').collect { it as int }
 
+// Release signing key lives outside the repo (default ~/.config/contract-desk/release.properties; override with
+// CD_SIGNING=<path>). Without it, release builds come out unsigned. Losing the key means installed apps can never update.
+def signingProps = new Properties()
+def signingFile = file(System.getenv('CD_SIGNING') ?: "${System.getProperty('user.home')}/.config/contract-desk/release.properties")
+if (signingFile.exists()) signingFile.withInputStream { signingProps.load(it) }
+
 android {
     namespace = "com.contractdesk.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -20,8 +26,19 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (signingProps.storeFile) {
+            release {
+                storeFile file(signingProps.storeFile)
+                storePassword signingProps.storePassword
+                keyAlias signingProps.keyAlias
+                keyPassword signingProps.keyPassword
+            }
+        }
+    }
     buildTypes {
         release {
+            if (signingProps.storeFile) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
