@@ -4,7 +4,9 @@
 // the folder copy wins unless the phone has newer unsaved changes to that same file.
 // Native calls go to the small Folder plugin (android/.../FolderPlugin.java). A folder is { path } (All files access: plain
 // file I/O) or { path, tree } (permission refused: everything through the system picker's content:// link).
-const cap = typeof window !== 'undefined' ? window.Capacitor : undefined;
+import { storedName, downloadName, UPLOAD_LIMITS } from '../../core/rules.js';
+
+const cap =typeof window !== 'undefined' ? window.Capacitor : undefined;
 export const isPhone = !!cap?.isNativePlatform?.();
 const native = (method, options = {}) => cap.nativePromise('Folder', method, options);
 
@@ -57,12 +59,11 @@ export async function request(method, url, body) {
 
 const where = (f) => f.tree || f.path;
 const treeId = (tree) => decodeURIComponent(tree.slice(tree.indexOf('/tree/') + 6));
-// Readable URL for a file in a folder (the WebView streams it; works for file paths and content:// links).
+// A file in a folder as a file:// or content:// link (for the phone's own apps), and as a URL the WebView streams.
 // ponytail: child links are built the way Android's own storage provider names them; the picker only accepts that provider.
-const fileSrc = (f, rel) =>
-  cap.convertFileSrc(
-    f.tree ? `${f.tree}/document/${encodeURIComponent(`${treeId(f.tree)}/${rel}`)}` : `file://${`${f.path}/${rel}`.split('/').map(encodeURIComponent).join('/')}`,
-  );
+const fileUri = (f, rel) =>
+  f.tree ? `${f.tree}/document/${encodeURIComponent(`${treeId(f.tree)}/${rel}`)}` : `file://${`${f.path}/${rel}`.split('/').map(encodeURIComponent).join('/')}`;
+const fileSrc = (f, rel) => cap.convertFileSrc(fileUri(f, rel));
 export const docSrc = (filePath) => fileSrc(folder, filePath.replaceAll('\\', '/'));
 
 async function read(f, name) {
@@ -90,9 +91,55 @@ async function writePieces(f, name, bytes) {
   }
 }
 
-function removeFiles(names) {
-  for (const n of names) native('remove', { folder: where(folder), name: `files/${n}` }).catch((err) => console.error('Could not remove file', n, err));
+function removeFiles(names, f = folder) {
+  for (const n of names) native('remove', { folder: where(f), name: `files/${n}` }).catch((err) => console.error('Could not remove file', n, err));
 }
+
+// ---------- documents ----------
+
+// Same contract as uploadFiles() on the desktop. Each file goes to files/ in 4 MB pieces, then the rules record them all
+// at once. On any problem nothing is recorded and every file this upload wrote is removed (the rules remove theirs).
+export async function upload(url, files, meta, onProgress) {
+  await ready;
+  const [, kind, id] = url.match(/^\/api\/(contracts|nocs)\/(\d+)\/documents$/);
+  const mb = (n) => `${Math.ceil(n / 1048576)} MB`;
+  if (files.length > UPLOAD_LIMITS.files) throw new Error(`Add at most ${UPLOAD_LIMITS.files} files at a time`);
+  const big = files.find((file) => file.size > UPLOAD_LIMITS.fileSize);
+  if (big) throw new Error(`"${big.name}" is ${mb(big.size)}; one file can be at most ${mb(UPLOAD_LIMITS.fileSize)}`);
+  const f = folder;
+  const total = files.reduce((n, file) => n + file.size, 0) || 1;
+  const stored = [];
+  let done = 0;
+  for (const file of files) {
+    const name = storedName(file.name);
+    stored.push({ original_name: file.name, storage_name: name, file_path: `files/${name}`, size_bytes: file.size });
+    try {
+      for (let at = 0; at === 0 || at < file.size; at += PIECE) {
+        const piece = file.slice(at, at + PIECE);
+        await native('write', { folder: where(f), name: `files/${name}`, data: await base64(piece), append: at > 0 });
+        onProgress((done += piece.size) / total);
+      }
+    } catch (err) {
+      removeFiles(stored.map((s) => s.storage_name), f);
+      throw new Error(`Could not save "${file.name}" in ${f.path}: ${err.message}`);
+    }
+  }
+  return call('addDocuments', { parentType: kind === 'contracts' ? 'contract' : 'noc', parentId: Number(id), stored, meta: JSON.stringify(meta) });
+}
+
+// The phone's own apps: "Open with…" (PDF reader, spreadsheet app), Downloads and the share sheet. Outside the app a file
+// keeps its display name; characters Android's shared storage refuses become "_".
+const relPath = (doc) => doc.file_path.replaceAll('\\', '/');
+const outName = (doc) => downloadName(doc).replace(/[\\/:*?"<>|]/g, '_');
+export async function openDoc(doc) {
+  try {
+    await cap.nativePromise('FileOpener', 'open', { filePath: fileUri(folder, relPath(doc)), contentType: doc.mime_type });
+  } catch (err) {
+    throw new Error(/activity not found/i.test(err.message) ? `No app on this phone opens ${doc.original_name.split('.').pop().toUpperCase()} files` : err.message);
+  }
+}
+export const saveCopy = async (doc) => (await native('saveToDownloads', { folder: where(folder), name: relPath(doc), as: outName(doc), mime: doc.mime_type })).name;
+export const shareDoc = (doc) => native('share', { folder: where(folder), name: relPath(doc), as: outName(doc), mime: doc.mime_type });
 
 // ---------- saving the folder copy ----------
 
@@ -289,5 +336,5 @@ export async function shareExport(query) {
   const { path } = await native('cacheFolder');
   const name = exportFileName();
   await writePieces({ path }, name, bytes);
-  await native('share', { folder: path, name, type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  await native('share', { folder: path, name, as: name, mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }

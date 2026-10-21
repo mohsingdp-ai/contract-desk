@@ -4,7 +4,7 @@
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
 import { setupDb, tx } from '../../core/schema.js';
 import { wrapWasmDb } from '../../core/wasm-db.js';
-import { createRules } from '../../core/rules.js';
+import { createRules, errorReply } from '../../core/rules.js';
 import { callRoute } from '../../core/routes.js';
 
 const NAME = '/contracts.db';
@@ -121,6 +121,14 @@ const ops = {
   },
   filePaths: () => wdb.selectObjects('SELECT file_path, size_bytes FROM documents'),
   exportData: ({ query }) => rules.exportData(query), // the workbook itself is built on the main thread (phone.js)
+  // Files already written to files/ by phone.js; on any problem the rules record nothing and remove them.
+  addDocuments({ parentType, parentId, stored, meta }) {
+    try {
+      return rules.addDocuments(parentType, parentId, stored, meta);
+    } catch (err) {
+      throw new Error(errorReply(err).message);
+    }
+  },
   request: ({ method, url, body }) => (url === '/api/meta' ? { status: 200, data: rules.meta() } : callRoute(rules, method, url, body)),
 };
 

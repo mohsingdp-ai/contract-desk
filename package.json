@@ -30,6 +30,7 @@
   },
   "devDependencies": {
     "@aparajita/capacitor-biometric-auth": "10.0.0",
+    "@capacitor-community/file-opener": "8.0.1",
     "@capacitor/android": "8.5.3",
     "@capacitor/app": "8.1.2",
     "@capacitor/cli": "8.5.3",

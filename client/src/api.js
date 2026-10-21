@@ -1,4 +1,4 @@
-import { isPhone, request } from './phone.js';
+import { isPhone, request, upload } from './phone.js';
 
 export { isPhone };
 
@@ -17,6 +17,7 @@ export async function api(method, url, body) {
 
 // XHR instead of fetch so the upload dialog can show progress.
 export function uploadFiles(url, files, meta, onProgress) {
+  if (isPhone) return upload(url, files, meta, onProgress); // written straight to the phone's data folder
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     files.forEach((f) => fd.append('files', f));
