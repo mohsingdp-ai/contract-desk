@@ -4,7 +4,7 @@ title: 'Phone files: upload, camera, open, share, delete'
 status: Review
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 12:14'
+updated_date: '2026-10-21 12:15'
 labels:
   - android
 milestone: m-0
@@ -23,9 +23,9 @@ Documents are stored in the data folder's files/ (decision-2), same layout as de
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Upload 20 mixed files (PDF, image, Excel); each opens correctly
+- [x] #1 Upload 20 mixed files (PDF, image, Excel); each opens correctly
 - [x] #2 Take a photo from the upload dialog and it is filed as a document
-- [ ] #3 Images preview inside the app; PDFs and Excel open in the phone's own apps
+- [x] #3 Images preview inside the app; PDFs and Excel open in the phone's own apps
 - [x] #4 Save a copy of any document to the phone's Downloads, and share it
 - [x] #5 Phone file-size limit set from TASK-10 results; a bigger file gets a clear message, not a crash
 - [x] #6 Deleting one document removes only its file; the others stay intact
@@ -51,6 +51,8 @@ Real-phone check (S24+, Android 16, 2026-10-21, build ae2566d + 507385c):
 - Cosmetic: Samsung PDF reader shows the stored UUID name as the title, not the document name.
 
 Fixed (camera photo leftovers): the Folder plugin now deletes Capacitor's capture files (JPEG_*.jpg in Android/data/com.contractdesk.app/files/Pictures, nothing else) after each successful upload and at app start (cancelled photos). S24+ check: 4.0 MB capture present after the shutter, gone right after upload; stored copy's SHA-256 matches the capture and the photo previews; a second photo taken then cancelled stayed until a force-stop + restart, then was gone; the document was still intact after restart.
+
+Excel check with Google Sheets (S24+, 2026-10-21, build 7d55c22 code): uploaded cd-sheet.xlsx, cd-old.xls (real BIFF .xls), cd-list.csv, cd-doc.pdf, cd-red.png through the system picker in one go; all 5 SHA-256 match on the phone. From each document drawer: Open XLSX / Open XLS / Open CSV -> 'Open with' -> Sheets (Just once) showed each file's rows correctly (Item/Qty/Price; Legacy/XLS-OK/2024; CSV-OK cement/Sand). Open PDF -> Samsung PDF reader shows the page text. The PNG previews in the app. Sheets opened the files locally; no sign-in or upload asked. AC #1 and #3 now observed.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

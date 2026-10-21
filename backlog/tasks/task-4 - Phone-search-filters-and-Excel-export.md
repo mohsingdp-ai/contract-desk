@@ -4,7 +4,7 @@ title: 'Phone search, filters and Excel export'
 status: Review
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 11:44'
+updated_date: '2026-10-21 12:15'
 labels:
   - android
 milestone: m-0
@@ -63,6 +63,8 @@ Real-phone check (S24+, Android 16, 2026-10-21): data folder with 3,000 contract
 | CT-2999 | 1/0/0 | 164, 153, 159 ms | 7.8-9.7 ms |
 Counts match the desktop rules on the same file. AC #5 left open: needs a low-end phone.
 Excel export on the phone: 'all' (1-contract DB and 3,000 DB) and 'filtered' (q=harbor) both open the share sheet with contract-desk-export-<date>.xlsx; 3,000-record export reached the share sheet in 1.3 s. Pulled from the app cache and read with exceljs: Contracts 3000 / NOCs 300 / Documents 10000 rows (all), 1000 / 50 / 3283 (harbor) = desktop exportData exactly. Not shown: opening in a spreadsheet app (none installed; Microsoft 365 routes to Copilot upload, not used). AC #4 stays open for the owner. Note: a search that only matches documents exports empty sheets (same shared rule as desktop: documents of matching contracts/NOCs).
+
+Google Sheets check (S24+, 2026-10-21): Sheets does NOT appear in the share menu. Android lists it only for 'Open with' (VIEW), not for share (SEND): package query shows SEND for xlsx -> Drive only; VIEW -> Sheets. The share menu's full app list (More) has no Sheets; Drive would upload, so it was not used. So AC #4 as worded (opens in a spreadsheet app via the share menu) is still not observed. The exported workbook itself is fine: pulled from the app cache (2 contracts, 5 documents), opened directly in Sheets via Open-with: Contracts tab (CT-OTHER, CT-XL) and Documents tab (5 rows, Contract / CT-XL) both show. Options for the owner: accept 'share -> Drive -> Sheets', or add an 'Open in spreadsheet app' button that uses Open-with like documents do.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
