@@ -11,7 +11,7 @@
     "build": "vite build",
     "start": "node --env-file-if-exists=.env server/index.js",
     "dev": "node --env-file-if-exists=.env --watch server/index.js & vite",
-    "test": "node test/acceptance.mjs",
+    "test": "node test/acceptance.mjs && node test/acceptance.mjs wasm",
     "test:e2e": "playwright test",
     "app": "vite build && electron .",
     "dist": "vite build && electron-builder --linux AppImage --win nsis",
@@ -30,6 +30,7 @@
     "@fontsource-variable/archivo": "^5.2.0",
     "@fontsource/red-hat-mono": "^5.2.0",
     "@playwright/test": "^1.64.1",
+    "@sqlite.org/sqlite-wasm": "3.54.1-build1",
     "@vitejs/plugin-react": "^5.0.0",
     "electron": "^44.9.0",
     "electron-builder": "^26.15.3",
@@ -48,6 +49,7 @@
     "files": [
       "electron/**",
       "server/**",
+      "core/**",
       "dist/**",
       "build/icon.png",
       "package.json"

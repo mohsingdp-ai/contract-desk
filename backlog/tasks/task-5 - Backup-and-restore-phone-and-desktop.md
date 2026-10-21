@@ -4,7 +4,7 @@ title: Backup and restore (phone and desktop)
 status: Backlog
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 07:13'
+updated_date: '2026-10-21 08:01'
 labels:
   - android
   - desktop
@@ -32,4 +32,5 @@ Export every record and file to one backup file, and restore it. Needed before r
 - [ ] #6 A damaged backup file is rejected without touching current data
 - [ ] #7 Backup of 3,000 contracts with their files completes without running out of memory
 - [ ] #8 Has its own automated test that runs with npm test
+- [ ] #9 A desktop database (WAL mode) opens on the phone: restore switches it to the phone's journal mode first (sqlite-wasm cannot open WAL files: SQLITE_CANTOPEN)
 <!-- AC:END -->

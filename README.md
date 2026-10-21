@@ -50,7 +50,7 @@ npm start              # http://127.0.0.1:4780   (settings: copy .env.example to
 | --- | --- |
 | `npm run dev` | Server with auto-restart + Vite dev server |
 | `npm run app` | Run the desktop app without packaging |
-| `npm test` | API acceptance checks |
+| `npm test` | API acceptance checks, run twice: with the desktop database and with the phone's (SQLite WebAssembly) |
 | `npm run test:e2e` | Browser UI tests: desktop, phone, Wi-Fi, desktop app (run `npm run build` first) |
 | `npm run dist:linux` | Build the Linux AppImage into `release/` |
 | `npm run demo:video` | Re-record the walkthrough video |
@@ -60,7 +60,8 @@ npm start              # http://127.0.0.1:4780   (settings: copy .env.example to
 **Phone access from source:** set `LAN_PASSCODE` (6+ characters) in `.env`.
 
 **Code map:**
-- `server/`: Express API and the SQLite schema (`db.js`).
+- `core/`: business rules and the database schema, shared by the desktop server and the phone app.
+- `server/`: Express API (desktop-only parts: Wi-Fi passcode, QR pairing, file streaming).
 - `client/`: React UI.
 - `electron/`: desktop app.
 - `test/`: API and UI tests.

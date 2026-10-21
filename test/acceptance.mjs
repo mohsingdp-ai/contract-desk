@@ -9,6 +9,8 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
 
+// `node test/acceptance.mjs wasm` runs every check against the phone's SQLite build (sqlite-wasm) instead of node:sqlite.
+if (process.argv[2] === 'wasm') process.env.DB_ENGINE = 'wasm';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contract-desk-test-'));
 const PORT = 4791;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -53,8 +55,10 @@ const form = (files, meta) => {
 };
 
 try {
-  console.log('Acceptance checks');
+  console.log(`Acceptance checks (${process.env.DB_ENGINE === 'wasm' ? 'phone database: sqlite-wasm' : 'desktop database: node:sqlite'})`);
   let contract, other, noc, invoiceDoc;
+  // Proof the engine switch took effect: node:sqlite keeps the file in WAL mode (header byte 18 = 2); the sqlite-wasm copy does not.
+  assert.equal(fs.readFileSync(path.join(dataDir, 'contracts.db'))[18], process.env.DB_ENGINE === 'wasm' ? 1 : 2, 'database engine in use');
 
   await check('create contract; duplicate Contract No. is rejected', async () => {
     const r = await api('POST', '/api/contracts', { contract_no: 'CT-2026-014', project_name: 'Harbor Pumps', firm_name: 'Northwind Trading', amount: '125000.50', currency: 'usd' });
