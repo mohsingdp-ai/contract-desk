@@ -1,7 +1,7 @@
 ---
 id: TASK-5
 title: Backup and restore (phone and desktop)
-status: Review
+status: Done
 assignee: []
 created_date: '2026-10-21 07:07'
 updated_date: '2026-10-21 13:40'
