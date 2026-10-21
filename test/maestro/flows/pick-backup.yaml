@@ -1,0 +1,13 @@
+# Android's file picker: Downloads > the newest Contract Desk backup.
+appId: com.google.android.documentsui
+---
+- retry:
+    maxRetries: 2
+    commands:
+      - tapOn: "Show roots"
+      - waitForAnimationToEnd
+      - tapOn: "Downloads"
+      - extendedWaitUntil:
+          visible: "contract-desk-backup-.*\\.tar"
+          timeout: 10000
+- tapOn: "contract-desk-backup-.*\\.tar"

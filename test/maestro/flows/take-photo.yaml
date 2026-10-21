@@ -1,0 +1,14 @@
+# The phone's camera app, opened by the app's 'Take photo': press the shutter, then accept the photo.
+# Emulator: com.android.camera2. Samsung: com.sec.android.app.camera.
+appId: com.contractdesk.app
+---
+- extendedWaitUntil:
+    visible:
+      id: ".*(shutter|capture).*"
+    timeout: 15000
+- tapOn:
+    id: ".*(shutter|capture).*"
+- extendedWaitUntil:
+    visible: "(?i)(done|ok)"
+    timeout: 15000
+- tapOn: "(?i)(done|ok)"

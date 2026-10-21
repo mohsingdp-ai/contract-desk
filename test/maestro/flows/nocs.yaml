@@ -1,0 +1,46 @@
+# NOCs: add, edit, delete. Leaves IND-M1 for the upload flow.
+appId: com.contractdesk.app
+---
+- launchApp
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: NOCS
+- tapOn: "NEW NOC"
+- tapOn: "INDENT NO.*"
+- inputText: "IND-M9"
+- tapOn: "NOC NAME"
+- inputText: "Maestro Gate"
+- hideKeyboard
+- tapOn: "CREATE NOC"
+- extendedWaitUntil:
+    visible: "IND-M9"
+    timeout: 10000
+- assertVisible: "Maestro Gate"
+- tapOn: "EDIT"
+- tapOn: "NOC NAME"
+- eraseText: 20
+- waitForAnimationToEnd # let the deletes land before typing
+- inputText: "Maestro Wharf"
+- hideKeyboard
+- tapOn: "SAVE NOC"
+- extendedWaitUntil:
+    visible: "Maestro Wharf"
+    timeout: 10000
+- tapOn: "DELETE"
+- assertVisible: "(?i)delete NOC IND-M9\\?"
+- assertVisible: "It has no attached documents."
+- tapOn: "DELETE NOC"
+- extendedWaitUntil:
+    visible: "NOCS 0"
+    timeout: 10000
+- tapOn: "NEW NOC"
+- tapOn: "INDENT NO.*"
+- inputText: "IND-M1"
+- tapOn: "NOC NAME"
+- inputText: "Maestro Gate"
+- hideKeyboard
+- tapOn: "CREATE NOC"
+- extendedWaitUntil:
+    visible: "IND-M1"
+    timeout: 10000

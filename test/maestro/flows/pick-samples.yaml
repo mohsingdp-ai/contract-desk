@@ -1,0 +1,19 @@
+# Android's file picker: Downloads > cd-maestro, select all four sample files.
+appId: com.google.android.documentsui
+---
+- retry:
+    maxRetries: 2
+    commands:
+      - tapOn: "Show roots"
+      - waitForAnimationToEnd
+      - tapOn: "Downloads"
+      - extendedWaitUntil:
+          visible: "cd-maestro"
+          timeout: 10000
+- tapOn: "cd-maestro"
+- longPressOn: "cd-invoice.pdf"
+- tapOn: "cd-scan.png"
+- tapOn: "cd-sheet.xlsx"
+- tapOn: "cd-list.csv"
+- assertVisible: "4 selected"
+- tapOn: "Select"

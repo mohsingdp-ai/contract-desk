@@ -1,0 +1,73 @@
+# Backup (saved to Downloads, share menu cancelled), then delete the contract, then restore it from that backup.
+# Also checks the restore dialog's counts and that 'Keep current records' changes nothing.
+appId: com.contractdesk.app
+---
+- launchApp
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: Settings
+- tapOn: "BACK UP NOW"
+- extendedWaitUntil:
+    visible: "contract-desk-backup-.*\\.tar"
+    timeout: 60000
+- back # cancel the share menu
+- extendedWaitUntil:
+    visible: "Backup saved in Downloads as contract-desk-backup-.*\\.tar"
+    timeout: 10000
+# Delete the contract: the warning lists its documents
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: CONTRACTS
+- tapOn: "CT-M1.*"
+- tapOn: "DELETE"
+- extendedWaitUntil:
+    visible: "This also deletes all 4 attached documents and permanently removes their files from your data folder:"
+    timeout: 10000
+- tapOn: "DELETE CONTRACT AND 4 DOCUMENTS"
+- extendedWaitUntil:
+    visible: "CONTRACTS 0"
+    timeout: 10000
+# Restore, first answer 'Keep current records'
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: Settings
+- tapOn: "RESTORE…"
+- runFlow: pick-backup.yaml
+- extendedWaitUntil:
+    visible: ".*Now: 0 contracts, 0 NOCs, 0 documents.*"
+    timeout: 60000
+- assertVisible: ".*After restoring: 1 contracts, 0 NOCs, 4 documents.*"
+- tapOn: "KEEP CURRENT RECORDS"
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: CONTRACTS
+- assertVisible: "CONTRACTS 0"
+# Now replace
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: Settings
+- tapOn: "RESTORE…"
+- runFlow: pick-backup.yaml
+- extendedWaitUntil:
+    visible: ".*After restoring: 1 contracts, 0 NOCs, 4 documents.*"
+    timeout: 60000
+- tapOn: "REPLACE WITH BACKUP"
+- extendedWaitUntil:
+    notVisible: "REPLACE WITH BACKUP"
+    timeout: 60000
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: CONTRACTS
+- extendedWaitUntil:
+    visible: "CONTRACTS 1"
+    timeout: 10000
+- tapOn: "CT-M1.*"
+- extendedWaitUntil:
+    visible: "Scan M1"
+    timeout: 10000

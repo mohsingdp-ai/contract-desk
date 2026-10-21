@@ -1,0 +1,27 @@
+# Run in this order; each flow builds on the records the previous ones left. The other .yaml files are sub-flows.
+flows:
+  - setup.yaml
+  - contracts.yaml
+  - nocs.yaml
+  - upload.yaml
+  - camera.yaml
+  - edit-document.yaml
+  - categories.yaml
+  - search.yaml
+  - export.yaml
+  - delete.yaml
+  - backup-restore.yaml
+executionOrder:
+  continueOnFailure: false
+  flowsOrder:
+    - setup
+    - contracts
+    - nocs
+    - upload
+    - camera
+    - edit-document
+    - categories
+    - search
+    - export
+    - delete
+    - backup-restore

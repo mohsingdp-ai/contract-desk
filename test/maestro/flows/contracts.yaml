@@ -1,0 +1,60 @@
+# Contracts: add, edit, delete (with its warning). Leaves CT-M1 for the document flows.
+appId: com.contractdesk.app
+---
+- launchApp
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: CONTRACTS
+# Add one to delete later
+- tapOn: "NEW CONTRACT"
+- tapOn: "CONTRACT NO.*"
+- inputText: "CT-M9"
+- tapOn: "PROJECT NAME"
+- inputText: "Maestro Port"
+- tapOn: "FIRM NAME"
+- inputText: "Tap Traders"
+- tapOn: "AMOUNT" # a field's label: tapping it focuses the field
+- inputText: "1500"
+- hideKeyboard
+- tapOn: "CREATE CONTRACT"
+- extendedWaitUntil:
+    visible: "CT-M9"
+    timeout: 10000
+- assertVisible: "Maestro Port"
+- assertVisible: "Tap Traders"
+# Edit
+- tapOn: "EDIT"
+- tapOn: "PROJECT NAME"
+- eraseText: 20
+- waitForAnimationToEnd # let the deletes land before typing
+- inputText: "Maestro Harbor"
+- hideKeyboard
+- tapOn: "SAVE CONTRACT"
+- extendedWaitUntil:
+    visible: "Maestro Harbor"
+    timeout: 10000
+# Delete: the warning names it and says it cannot be undone
+- tapOn: "DELETE"
+- assertVisible: "(?i)delete contract CT-M9\\?"
+- assertVisible: "It has no attached documents."
+- assertVisible: "This cannot be undone."
+- tapOn: "DELETE CONTRACT"
+- extendedWaitUntil:
+    visible: "CONTRACTS 0"
+    timeout: 10000
+# The one the document flows use
+- tapOn: "NEW CONTRACT"
+- tapOn: "CONTRACT NO.*"
+- inputText: "CT-M1"
+- tapOn: "PROJECT NAME"
+- inputText: "Maestro Port"
+- tapOn: "FIRM NAME"
+- inputText: "Tap Traders"
+- tapOn: "AMOUNT"
+- inputText: "2500.50"
+- hideKeyboard
+- tapOn: "CREATE CONTRACT"
+- extendedWaitUntil:
+    visible: "CT-M1"
+    timeout: 10000

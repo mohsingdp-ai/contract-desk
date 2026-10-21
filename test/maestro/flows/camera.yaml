@@ -1,0 +1,24 @@
+# Take photo: the camera opens from Add documents; the photo is filed like any other file.
+appId: com.contractdesk.app
+---
+- launchApp
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: CONTRACTS
+- tapOn: "CT-M1.*"
+- tapOn: "ADD DOCUMENTS"
+- tapOn: "TAKE PHOTO"
+- runFlow: take-photo.yaml
+- extendedWaitUntil:
+    visible: "Remove JPEG_.*"
+    timeout: 15000
+- tapOn: "Choose category…"
+- tapOn: "Bank Payment Documents"
+- tapOn: "UPLOAD 1 FILE"
+- extendedWaitUntil:
+    notVisible: "UPLOAD 1 FILE"
+    timeout: 30000
+- scrollUntilVisible:
+    element: "BANK PAYMENT DOCUMENTS"
+- assertVisible: "JPEG_.*\\.jpg" # the photo, filed

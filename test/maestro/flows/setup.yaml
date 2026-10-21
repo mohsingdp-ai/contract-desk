@@ -1,0 +1,21 @@
+# Fresh install (run.sh uninstalls first): first launch asks where to keep records;
+# grant All files access in Android's settings page, come back, the empty desk opens.
+appId: com.contractdesk.app
+---
+- launchApp:
+    clearState: true
+    permissions: { all: deny } # Maestro grants everything by default; start like a real fresh install
+- extendedWaitUntil:
+    visible: "(?i)(allow all files access|the desk is empty\\.)"
+    timeout: 20000
+- runFlow:
+    when:
+      visible: "(?i)allow all files access"
+    commands:
+      - tapOn: "(?i)allow all files access"
+      # Android's "All files access" page for this app (Pixel: "Allow access to manage all files", Samsung: "Allow permission").
+      - tapOn: "(?i)(allow access to manage all files|allow permission)"
+      - back
+- extendedWaitUntil:
+    visible: "(?i)the desk is empty\\."
+    timeout: 20000

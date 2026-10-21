@@ -13,6 +13,7 @@
     "dev": "node --env-file-if-exists=.env --watch server/index.js & vite",
     "test": "node test/acceptance.mjs && node test/acceptance.mjs wasm && node test/phone.mjs",
     "test:e2e": "playwright test",
+    "test:device": "bash test/maestro/run.sh",
     "app": "vite build && electron .",
     "dist": "vite build && electron-builder --linux AppImage --win nsis",
     "dist:linux": "vite build && electron-builder --linux AppImage",

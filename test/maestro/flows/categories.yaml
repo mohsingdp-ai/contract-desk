@@ -1,0 +1,50 @@
+# Document categories (from Settings): add, rename, move up, delete.
+appId: com.contractdesk.app
+---
+- launchApp
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: Settings
+- scrollUntilVisible:
+    element: "DOCUMENT CATEGORIES"
+- tapOn: "DOCUMENT CATEGORIES"
+- extendedWaitUntil:
+    visible: "CATEGORIES 6"
+    timeout: 10000
+- scrollUntilVisible:
+    element: "ADD CATEGORY"
+- tapOn: "NEW CATEGORY"
+- inputText: "Maestro Cat"
+- hideKeyboard
+- tapOn: "ADD CATEGORY"
+- extendedWaitUntil:
+    visible: "CATEGORIES 7"
+    timeout: 10000
+# Rename
+- scrollUntilVisible:
+    element: "Name of Maestro Cat"
+- tapOn: "Name of Maestro Cat"
+- eraseText: 20
+- waitForAnimationToEnd # let the deletes land before typing
+- inputText: "Maestro Kind"
+- hideKeyboard
+- tapOn: "SAVE"
+- extendedWaitUntil:
+    visible: "Name of Maestro Kind"
+    timeout: 10000
+# Move up: it was last, now above Other Documents
+- tapOn: "Move Maestro Kind up"
+- extendedWaitUntil:
+    visible:
+      text: "Name of Maestro Kind"
+      above: "Name of Other Documents"
+    timeout: 10000
+# Delete (no documents under it)
+- tapOn: "Delete Maestro Kind"
+- assertVisible: "No documents are filed under it."
+- tapOn: "DELETE CATEGORY"
+- extendedWaitUntil:
+    visible: "CATEGORIES 6"
+    timeout: 10000
+- assertNotVisible: "Name of Maestro Kind"

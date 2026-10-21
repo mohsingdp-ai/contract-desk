@@ -1,0 +1,49 @@
+# Edit a document: rename, change category, Reference No., tags (' urgent ' joins the existing 'Urgent').
+appId: com.contractdesk.app
+---
+- launchApp
+# Opened from a search result: after a touch scroll, Android's WebView leaves the document panel out of the
+# accessibility tree (seen on the emulator), so the flow avoids scrolling the page before opening it.
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: SEARCH
+- tapOn: "Search everything filed"
+- inputText: "cd-scan"
+- hideKeyboard
+- tapOn: "cd-scan"
+- extendedWaitUntil:
+    visible: "Close document"
+    timeout: 10000
+- scrollUntilVisible:
+    element: "SAVE CHANGES"
+- tapOn: "DISPLAY NAME.*"
+- eraseText: 20
+- waitForAnimationToEnd # let the deletes land before typing
+- inputText: "Scan M1"
+- hideKeyboard
+- tapOn: "Commercial Invoice"
+- tapOn: "Packing List"
+- tapOn: "REFERENCE NO."
+- inputText: "INV-M-77"
+- tapOn: "Add tag"
+- inputText: " urgent "
+- pressKey: Enter
+- hideKeyboard
+- assertVisible: "Remove tag Urgent"
+- assertNotVisible: "Remove tag urgent"
+- scrollUntilVisible:
+    element: "SAVE CHANGES"
+- tapOn: "SAVE CHANGES"
+- extendedWaitUntil:
+    visible: "SAVED"
+    timeout: 10000
+- scrollUntilVisible:
+    element: "Close document"
+    direction: UP
+- tapOn: "Close document"
+- scrollUntilVisible:
+    element: "PACKING LIST"
+- scrollUntilVisible:
+    element: "Scan M1"
+- assertVisible: "INV-M-77"

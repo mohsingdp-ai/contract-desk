@@ -1,0 +1,46 @@
+# Deleting warns first and names what goes: one document (from its row), then a NOC with its document.
+appId: com.contractdesk.app
+---
+- launchApp
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: CONTRACTS
+- tapOn: "CT-M1.*"
+- extendedWaitUntil:
+    visible: "COMMERCIAL INVOICE"
+    timeout: 10000
+- scrollUntilVisible:
+    element: "cd-list"
+    centerElement: true
+- tapOn:
+    text: "Delete"
+    below: "cd-list.csv"
+- extendedWaitUntil:
+    visible: "Delete “cd-list”\\?"
+    timeout: 10000
+- assertVisible: ".*removes the document record and its stored file.*"
+- assertVisible: "This cannot be undone."
+- tapOn:
+    text: "DELETE" # text matching ignores case: pick the dialog's button, not a row's Delete icon
+    rightOf: "KEEP IT"
+    below: "This cannot be undone."
+- extendedWaitUntil:
+    notVisible: "cd-list.csv"
+    timeout: 10000
+# NOC with one document
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: NOCS
+- tapOn: "IND-M1.*"
+- tapOn: "DELETE"
+- extendedWaitUntil:
+    visible: "(?i)delete NOC IND-M1\\?"
+    timeout: 10000
+- assertVisible: "This also deletes its attached document and permanently removes its file from your data folder:"
+- assertVisible: "cd-invoice.*"
+- tapOn: "DELETE NOC AND 1 DOCUMENT"
+- extendedWaitUntil:
+    visible: "NOCS 0"
+    timeout: 10000

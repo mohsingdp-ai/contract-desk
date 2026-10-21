@@ -1,0 +1,40 @@
+# Excel export: Open -> Android's "Open with" -> Google Sheets shows the workbook (opened locally; the flow fails
+# rather than sign in; a device without Sheets: run with -e SHEETS=skip).
+# Share -> Android's share menu with the .xlsx, cancelled with Back (nothing is sent).
+appId: com.contractdesk.app
+---
+- launchApp
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: SEARCH
+- runFlow:
+    when:
+      true: ${typeof SHEETS === 'undefined' || SHEETS !== 'skip'}
+    commands:
+      - tapOn: "OPEN EXCEL all"
+      - extendedWaitUntil:
+          visible: "Sheets"
+          timeout: 20000
+      - tapOn: "Sheets"
+      - runFlow:
+          when:
+            visible: "(?i)just once"
+          commands:
+            - tapOn: "(?i)just once"
+      - extendedWaitUntil:
+          visible: "CT-M1"
+          timeout: 30000
+      - assertNotVisible: "(?i)sign in"
+      - launchApp # back to Contract Desk (Sheets stays in the background)
+- extendedWaitUntil:
+    visible: "Share Excel export"
+    timeout: 10000
+- tapOn: "Share Excel export"
+- extendedWaitUntil:
+    visible: "contract-desk-export-.*\\.xlsx"
+    timeout: 20000
+- back # cancel the share menu
+- extendedWaitUntil:
+    visible: "Share Excel export"
+    timeout: 10000

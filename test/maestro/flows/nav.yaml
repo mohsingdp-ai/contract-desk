@@ -1,0 +1,7 @@
+# Top-bar tab, from anywhere: the bar scrolls away with the page, so scroll back up first. Env: TAB (SEARCH, CONTRACTS, NOCS, Settings).
+appId: com.contractdesk.app
+---
+- scrollUntilVisible:
+    element: "Contract Desk home"
+    direction: UP
+- tapOn: ${TAB}

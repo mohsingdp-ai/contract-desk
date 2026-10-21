@@ -1,0 +1,50 @@
+# Search (identifier, Reference No.) and filters (tag, file type). Uses what upload and edit-document filed.
+appId: com.contractdesk.app
+---
+- launchApp
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: SEARCH
+- tapOn: "Search everything filed"
+- inputText: "ct-m1"
+- hideKeyboard
+- extendedWaitUntil:
+    visible: "CONTRACTS 1"
+    timeout: 10000
+- assertVisible: "EXACT" # exact identifier match, any case
+- tapOn: "Clear search"
+- tapOn: "Search everything filed"
+- inputText: "INV-M-77"
+- hideKeyboard
+- extendedWaitUntil:
+    visible: "DOCUMENTS 1"
+    timeout: 10000
+- assertVisible: "Scan M1"
+- tapOn: "Clear search"
+# Filters
+- tapOn: "FILTERS"
+- tapOn:
+    text: "All"
+    below: "TAG"
+- tapOn: "Urgent \\(2\\)"
+- extendedWaitUntil:
+    visible: "DOCUMENTS 2"
+    timeout: 10000
+- tapOn:
+    text: "All"
+    below: "FILE TYPE"
+- tapOn: "Image"
+- extendedWaitUntil:
+    visible: "DOCUMENTS 1"
+    timeout: 10000
+- assertVisible: "CLEAR 2 FILTERS"
+- scrollUntilVisible:
+    element: "Scan M1"
+- scrollUntilVisible:
+    element: "CLEAR 2 FILTERS"
+    direction: UP
+- tapOn: "CLEAR 2 FILTERS"
+- extendedWaitUntil:
+    visible: "RECENT DOCUMENTS.*"
+    timeout: 10000

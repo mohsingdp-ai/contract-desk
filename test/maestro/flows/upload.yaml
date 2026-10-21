@@ -1,0 +1,64 @@
+# Upload: pick the 4 sample files (seed.mjs, pushed to Download/cd-maestro) with Android's file picker,
+# file them under one category, tag one 'Urgent', upload. Then one file to the NOC.
+appId: com.contractdesk.app
+---
+- launchApp
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: CONTRACTS
+- tapOn: "CT-M1.*"
+- tapOn: "ADD DOCUMENTS"
+- tapOn: "(?i)tap to choose files"
+- runFlow: pick-samples.yaml
+- extendedWaitUntil:
+    visible: "Remove cd-list.csv"
+    timeout: 10000
+- tapOn: "Choose category…"
+- tapOn: "Commercial Invoice"
+- tapOn:
+    text: "Add tag"
+    index: 0
+- inputText: "Urgent"
+- pressKey: Enter
+- hideKeyboard
+- assertVisible: "Remove tag Urgent"
+- scrollUntilVisible:
+    element: "UPLOAD 4 FILES"
+- tapOn: "UPLOAD 4 FILES"
+- extendedWaitUntil:
+    notVisible: "UPLOAD 4 FILES"
+    timeout: 30000
+- scrollUntilVisible:
+    element: "cd-invoice"
+- assertVisible: "cd-scan"
+- assertVisible: "cd-sheet"
+- assertVisible: "cd-list"
+# NOC: one file, no category
+- runFlow:
+    file: nav.yaml
+    env:
+      TAB: NOCS
+- tapOn: "IND-M1.*"
+- tapOn: "ADD DOCUMENTS"
+- tapOn: "(?i)tap to choose files"
+- retry:
+    maxRetries: 2
+    commands:
+      - tapOn: "Show roots"
+      - waitForAnimationToEnd
+      - tapOn: "Downloads"
+      - extendedWaitUntil:
+          visible: "cd-maestro"
+          timeout: 10000
+- tapOn: "cd-maestro"
+- tapOn: "cd-invoice.pdf"
+- extendedWaitUntil:
+    visible: "Remove cd-invoice.pdf"
+    timeout: 10000
+- tapOn: "UPLOAD 1 FILE"
+- extendedWaitUntil:
+    notVisible: "UPLOAD 1 FILE"
+    timeout: 30000
+- scrollUntilVisible:
+    element: "cd-invoice.pdf"

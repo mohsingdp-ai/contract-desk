@@ -87,13 +87,16 @@ npm start              # http://127.0.0.1:4780   (settings: copy .env.example to
 | `npm run demo:video` | Re-record the walkthrough video |
 | `npm run android:build` | Build the Android app (debug APK) |
 | `npm run android:install` | Install that APK on the phone connected by USB |
+| `npm run test:device` | Tap-through tests on the phone connected by USB (needs [Maestro CLI](https://github.com/mobile-dev-inc/Maestro/releases)): builds and installs the APK, runs `test/maestro/flows`, then cleans up |
 
 **Android build:** needs JDK 21 (`JAVA_HOME`) and the Android SDK (`ANDROID_HOME`, e.g. `~/Android/Sdk`). The first build
 downloads Gradle and the build tools by itself. To install: USB debugging on, Samsung Auto Blocker off, allow the install on the phone.
 
 **Phone tests** (`test/phone.mjs`, last step of `npm test`): builds the phone bundle and runs it in Chromium with the real phone
 database (SQLite WebAssembly). Only the Android side (All files access, folder picker, file writes, share, lock) is played
-by the script, on a temporary folder. Real-phone checks are done by hand over `adb`.
+by the script, on a temporary folder. `npm run test:device` taps through the real APK on a phone (unlocked, USB debugging on;
+`ANDROID_SERIAL` picks one of several devices; `-- -e SHEETS=skip` without Google Sheets). It uses Documents/Contract Desk
+and refuses to run if that folder holds real records.
 
 **Releases:** push a version tag (`git tag v1.0.1 && git push --tags`) and GitHub builds the Windows and Linux installers and publishes them.
 
