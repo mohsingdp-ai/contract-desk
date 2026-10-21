@@ -4,7 +4,7 @@ title: Backup and restore (phone and desktop)
 status: Review
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 13:04'
+updated_date: '2026-10-21 13:40'
 labels:
   - android
   - desktop
@@ -24,15 +24,15 @@ Export every record and file to one backup file, and restore it. Needed before r
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Back up, wipe the app, restore: every record and file comes back
-- [ ] #2 Backup is saved off the phone (share to Drive, email, PC); never only inside the app
-- [ ] #3 A phone backup restores on desktop, and a desktop backup restores on the phone
+- [x] #1 Back up, wipe the app, restore: every record and file comes back
+- [x] #2 Backup is saved off the phone (share to Drive, email, PC); never only inside the app
+- [x] #3 A phone backup restores on desktop, and a desktop backup restores on the phone
 - [x] #4 Restore asks for confirmation and says what will be replaced
 - [x] #5 App reminds the owner to back up when no backup was made recently
 - [x] #6 A damaged backup file is rejected without touching current data
-- [ ] #7 Backup of 3,000 contracts with their files completes without running out of memory
+- [x] #7 Backup of 3,000 contracts with their files completes without running out of memory
 - [x] #8 Has its own automated test that runs with npm test
-- [ ] #9 A desktop database (WAL mode) opens on the phone: restore switches it to the phone's journal mode first (sqlite-wasm cannot open WAL files: SQLITE_CANTOPEN)
+- [x] #9 A desktop database (WAL mode) opens on the phone: restore switches it to the phone's journal mode first (sqlite-wasm cannot open WAL files: SQLITE_CANTOPEN)
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -48,6 +48,18 @@ Review fixes (round 2):
 - Fixed a race found by the Electron test: the server read the client address after the connection closed (cancelled download) and noted the backup; it now decides at request start.
 
 Last review nits: phone restore now replaces the database in ONE worker step ('restore'): the copy is prepared in memory first (set-up, last-backup time, change counter one above the saved marker), then imported, so a kill at any point leaves either the old database or one marked as not yet in the folder; the next start saves it before tidying files. Desktop apply: closing the DB and removing -wal/-shm are inside the recovery block; on failure the restored DB's -wal/-shm are removed before the old one goes back. Tests: phone kill right after the restore step (before the folder save) -> next start saves the restored records with all their files; desktop start-up recovery (set-aside only -> put back; both -> set-aside removed). Counts: acceptance 28/27, phone 50, e2e 42.
+
+Real-phone check (S24+, Android 16, 2026-10-21, build e530a48 then f50fe54 for the big run). Test data: desktop server on a temp folder, 3 contracts, 1 NOC, 5 real documents (2 PDFs from CUPS, 2 JPEGs, 1 PNG), tags + Reference No.
+#3/#9 desktop -> phone: the desktop contracts.db was in WAL mode (header bytes 18/19 = 2/2) when its backup was made; restored on the freshly installed phone via Restore a backup -> system picker -> Downloads. Dialog: 'Now: 0 contracts, 0 NOCs, 0 documents / After restoring: 3 contracts, 1 NOCs, 5 documents'. After Replace: all 5 files' SHA-256 on the phone (adb sha256sum) equal the desktop's; folder contracts.db integrity ok, same rows (contracts, NOCs, documents, 3 tag links: same fingerprint), header 1/1. Also a copy of that backup with its database header forced to WAL (2/2, checksum fixed) restored fine on the phone (folder copy in rollback mode, integrity ok).
+#2: Back up... on the phone wrote /sdcard/Download/contract-desk-backup-2026-10-21.tar (1,449,472 bytes), the app said 'Backup saved in Downloads as contract-desk-backup-2026-10-21.tar', and Android's share sheet opened with that file; cancelled with Back, nothing sent.
+#3 phone -> desktop: that phone .tar (manifest from: phone, 3/1/5) pulled to the PC, POST /api/restore + /api/restore/apply on a desktop server with an empty temp DATA_DIR: counts 3/1/5, same 5 SHA-256, same rows fingerprint.
+#1: uninstalled the app AND deleted Documents/Contract Desk, reinstalled, empty desk; Restore a backup -> picker -> the phone backup in Downloads ('made Oct 21, 2026 on a phone', now 0/0/0, after 3/1/5) -> Replace: 3 contracts, 1 NOC, 5 documents back, all 5 SHA-256 identical to before the wipe, same rows fingerprint, integrity ok.
+#6 (re-check): a truncated copy (first 900,000 bytes) -> 'This backup file is damaged or is not a Contract Desk backup (it is cut off). Nothing was changed.'; files, hashes and database unchanged, no .restore left. Repeated on the big folder below (10,000 file hashes and DB unchanged).
+#4 (re-check): dialog shows now/after counts every time, incl. 'Now: 3,000 contracts, 300 NOCs, 10,000 documents / After restoring: 3 contracts, 1 NOCs, 5 documents'; 'Keep current records' left the big folder as it was.
+#7: data folder Documents/CD Big Test with 3,000 contracts, 300 NOCs, 10,000 documents, 20,000 tag links (seedBig) and a real file for each document (15-35 KB, two of 30 MB; 298 MB of files, DB 9.5 MB), opened at start via the folder note. Back up... took about 38 s to the file in Downloads (331,519,488 bytes), then the share sheet (cancelled). No crash, same app and WebView processes throughout. dumpsys meminfo every ~0.3 s: app Java heap 11 -> peak 71 -> 11 MB; app native heap 33 -> 34 MB; app total PSS 185 -> peak 249 -> 135 MB; WebView renderer PSS 138 -> peak 221 -> 177 MB. Pulled .tar: manifest from phone 3000/300/10000, all 10,000 file SHA-256 equal the source files, DB same rows fingerprint, integrity ok.
+Bug found and fixed (f50fe54): on the phone the empty desk's three buttons (New contract / New NOC / Restore a backup...) did not fit one row: 'New contract' was cut off on the left and the row widened the page to 417 px on a 384 px screen, so the restore dialog was cut off on the right; the dialog's 'Keep current records' was also cut off on the left. Both rows wrap now; checked on the S24+ (dialog answers stacked, page 384 px wide). phone.mjs asserts both.
+Also seen, not fixed: with 3,000 contracts the top bar's NOCS count is hidden under the theme button (CONTRACTS 3,000 NOCS ...).
+Cleanup: app uninstalled; Documents/Contract Desk, Documents/CD Big Test, the folder note and all Download test files/backups removed; media index rescanned.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
