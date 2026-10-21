@@ -7,8 +7,13 @@ import { wrapWasmDb } from '../core/wasm-db.js';
 export function openDb(dataDir) {
   fs.mkdirSync(path.join(dataDir, 'files'), { recursive: true });
   const db = new DatabaseSync(path.join(dataDir, 'contracts.db'));
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
-  setupDb(db);
+  try {
+    db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
+    setupDb(db);
+  } catch (err) {
+    db.close(); // don't keep the file open (a restore puts the previous database back after this)
+    throw err;
+  }
   // Closing merges the WAL into contracts.db, so a closed app leaves one complete file that can be copied (e.g. to the phone).
   process.once('exit', () => db.isOpen && db.close());
   return db;

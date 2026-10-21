@@ -71,7 +71,10 @@ function inspect(bytes) {
     const p = sqlite3.wasm.allocFromTypedArray(copy);
     const flags = sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE | sqlite3.capi.SQLITE_DESERIALIZE_RESIZEABLE;
     mem.checkRc(sqlite3.capi.sqlite3_deserialize(mem, 'main', p, copy.length, copy.length, flags));
-    return mem.selectValue('PRAGMA integrity_check') === 'ok' ? mem.selectObject(COUNTS_SQL) : null;
+    if (mem.selectValue('PRAGMA integrity_check') !== 'ok') return null;
+    const counts = mem.selectObject(COUNTS_SQL); // throws without the app's tables
+    setupDb(wrapWasmDb(sqlite3, mem)); // what opening it will do, tried on the copy: importing it can't trip over it
+    return counts;
   } catch {
     return null; // e.g. not a database, or without the contracts table
   } finally {

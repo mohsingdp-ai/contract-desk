@@ -409,6 +409,8 @@ try {
     };
   };
   let backup, before;
+  const staging = path.join(dataDir, '.restore');
+  const noStaging = () => !fs.existsSync(staging) || fs.readdirSync(staging).length === 0; // no restore copy left behind
 
   await check('backup: one archive, manifest first, the database in rollback mode and every stored file; the time is kept', async () => {
     const c = (await api('POST', '/api/contracts', { contract_no: 'BK-1', project_name: 'Backup', firm_name: 'Oakline Ltd', amount: 77, currency: 'USD' })).body;
@@ -454,7 +456,7 @@ try {
     assert.equal((await api('GET', '/api/documents?tag=kept')).body.total, 2);
     assert.equal((await api('GET', '/api/meta')).body.lastBackup, JSON.parse((await tarEntries(backup))[0].data).made);
     assert.equal((await api('POST', '/api/restore/apply')).status, 409, 'a restore applies once');
-    assert.ok(!fs.existsSync(path.join(dataDir, '.restore')));
+    assert.ok(noStaging());
   });
 
   await check('a damaged backup is rejected and nothing changes', async () => {
@@ -464,11 +466,13 @@ try {
       b[at] ^= 0xff;
       return b;
     };
-    const made = (list) => {
+    // A backup put together by hand: the manifest lists `list`; the archive holds `tar` (normally the same).
+    const made = (list, { tar = list, format = 1 } = {}) => {
       const files = Object.fromEntries(list.map(([n, b]) => [n, { size: b.length, sha256: sha(b) }]));
-      const m = Buffer.from(JSON.stringify({ app: 'Contract Desk', format: 1, from: 'desktop', made: new Date().toISOString(), counts: {}, files }));
-      return Buffer.concat([...[['manifest.json', m], ...list].flatMap(([n, b]) => [tarHeader(n, b.length), b, tarPad(b.length)]), tarEnd()]);
+      const m = Buffer.from(JSON.stringify({ app: 'Contract Desk', format, from: 'desktop', made: new Date().toISOString(), counts: {}, files }));
+      return Buffer.concat([...[['manifest.json', m], ...tar].flatMap(([n, b]) => [tarHeader(n, b.length), b, tarPad(b.length)]), tarEnd()]);
     };
+    const all = entries.slice(1).map((e) => [e.name, e.data]);
     const variants = {
       'cut off': backup.subarray(0, backup.length - 1500),
       'a changed byte in a file': flip(backup.indexOf(entries.at(-1).data) + 3),
@@ -477,6 +481,11 @@ try {
       'a changed byte in the manifest': flip(600),
       'a database that is not healthy': made([['contracts.db', Buffer.alloc(8192, 7)]]),
       'a path outside the data folder': made([['contracts.db', entries[1].data], ['../escape.pdf', PDF]]),
+      'a listed file missing from the archive': made(all, { tar: all.slice(0, -1) }),
+      'the same file twice': made(all, { tar: [...all, all.at(-1)] }),
+      'format 0': made(all, { format: 0 }),
+      'format "1" (not a number)': made(all, { format: '1' }),
+      'format 1.5': made(all, { format: 1.5 }),
       'not a backup': PDF,
     };
     // A file in use that differs from the backup's copy of it must stay exactly as it is.
@@ -488,7 +497,7 @@ try {
       assert.equal(r.status, 400, what);
       assert.match(r.body.error, /^This backup file is damaged or is not a Contract Desk backup \(.+\)\. Nothing was changed\.$/, what);
       assert.deepEqual(await everything(), state, what);
-      assert.ok(!fs.existsSync(path.join(dataDir, '.restore')) && !fs.existsSync(path.join(dataDir, 'escape.pdf')), what);
+      assert.ok(noStaging() && !fs.existsSync(path.join(dataDir, 'escape.pdf')), what);
     }
     const newer = made([['contracts.db', entries[1].data]]).toString('latin1').replace('"format":1', '"format":9');
     assert.match((await restore(Buffer.from(newer, 'latin1'))).body.error, /newer version of Contract Desk/);
@@ -497,6 +506,32 @@ try {
     assert.equal(sha(fs.readFileSync(x)), state.files[before.documents[0].storage_name]);
     assert.equal((await api('POST', '/api/restore/apply')).status, 200);
     assert.deepEqual(await everything(), before);
+  });
+
+  await check('a restore whose switch fails puts the current database back: the server keeps serving the current records', async () => {
+    const aside = path.join(dataDir, 'contracts.db.before-restore');
+    const state = await everything();
+    // 1. Moving the current database aside fails (something already in the way).
+    fs.mkdirSync(path.join(aside, 'in-the-way'), { recursive: true });
+    assert.equal((await restore(backup)).status, 200);
+    let r = await api('POST', '/api/restore/apply');
+    assert.equal(r.status, 500);
+    assert.match(r.body.error, /could not be put in place .* Your current records are still here\./);
+    assert.deepEqual(await everything(), state);
+    assert.equal((await api('POST', '/api/contracts', { contract_no: 'STILL-WORKS', amount: 1, currency: 'USD' })).status, 201, 'the database is open, not closed');
+    fs.rmSync(aside, { recursive: true });
+    // 2. The restored database can't be opened after the switch (it is a folder): the current one goes back.
+    const withNew = await everything();
+    assert.equal((await restore(backup)).status, 200);
+    const [dir] = fs.readdirSync(staging);
+    fs.rmSync(path.join(staging, dir, 'contracts.db'));
+    fs.mkdirSync(path.join(staging, dir, 'contracts.db', 'not-a-database'), { recursive: true });
+    r = await api('POST', '/api/restore/apply');
+    assert.equal(r.status, 500);
+    assert.deepEqual(await everything(), withNew);
+    assert.ok(!fs.existsSync(aside) && fs.statSync(path.join(dataDir, 'contracts.db')).isFile() && noStaging());
+    await api('DELETE', `/api/contracts/${withNew.contracts.find((c) => c.contract_no === 'STILL-WORKS').id}`);
+    assert.deepEqual(await everything(), state);
   });
 
   await check('a Windows desktop backup (paths stored as files\\name) restores here with / paths and working files', async () => {

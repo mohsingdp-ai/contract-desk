@@ -77,9 +77,13 @@ function Desk() {
   const { data: meta } = useData('/api/meta', version); // categories can change while the app is open
   const { data: facets } = useData('/api/facets', version);
   const [needPasscode, setNeedPasscode] = useState(false);
-  const [remind, setRemind] = useState(true); // the backup reminder, until a backup is started
-  // The desktop's backup is a download, which the page can't follow: refresh shortly after, and stop reminding meanwhile.
-  const onBackup = useCallback(() => (setRemind(false), setTimeout(bump, 1500)), [bump]);
+  // After a backup, the last-backup time (and so the reminder) is read again. The desktop's backup is a download the page
+  // can't follow: it counts once saved, so look again when the window is back from the save dialog, and shortly after.
+  const onBackup = useCallback(() => {
+    if (isPhone) return bump();
+    window.addEventListener('focus', bump, { once: true });
+    setTimeout(bump, 2000);
+  }, [bump]);
   const [phoneStatus, setPhoneStatus] = useState(phone.status);
   useEffect(() => {
     if (!isPhone) return;
@@ -119,7 +123,6 @@ function Desk() {
     facets,
     version,
     bump,
-    remind,
     onBackup,
     tagNames: facets.tags.map((t) => t.name),
     openDoc: (id) => go(route.path, { ...params, doc: id }),
@@ -426,7 +429,13 @@ const countsLine = (c) => `${c.contracts.toLocaleString()} contracts, ${c.nocs.t
 function RestoreDialog({ file, onClose }) {
   const [s, setS] = useState({ step: 'checking' });
   useEffect(() => {
-    checkRestore(file).then((r) => setS({ step: 'ready', ...r }), (err) => setS({ step: 'error', error: err.message }));
+    // Closing the dialog while checking stops the check; one that finishes anyway is cancelled (its copy removed).
+    const stop = new AbortController();
+    checkRestore(file, stop.signal).then(
+      (r) => (stop.signal.aborted ? cancelRestore() : setS({ step: 'ready', ...r })),
+      (err) => stop.signal.aborted || setS({ step: 'error', error: err.message }),
+    );
+    return () => stop.abort();
   }, [file]);
   const close = () => {
     if (s.step === 'applying') return;
@@ -479,10 +488,10 @@ function RestoreDialog({ file, onClose }) {
 }
 
 // On the search page (the front door) when there are records and no backup in the last two weeks.
-function BackupReminder({ meta, facets, remind, onBackup }) {
+function BackupReminder({ meta, facets, onBackup }) {
   const { contracts, nocs, documents } = facets.counts;
   const days = meta.lastBackup ? Math.floor((Date.now() - Date.parse(meta.lastBackup)) / 864e5) : null;
-  if (!remind || !(contracts + nocs + documents) || (days !== null && days < REMIND_AFTER_DAYS)) return null;
+  if (!(contracts + nocs + documents) || (days !== null && days < REMIND_AFTER_DAYS)) return null;
   return (
     <p className="backup-reminder" role="status">
       <span>
@@ -746,7 +755,7 @@ function Empty({ children }) {
 
 // ---------- search (front door) ----------
 
-function SearchPage({ route, go, meta, facets, version, openDoc, openParent, remind, onBackup }) {
+function SearchPage({ route, go, meta, facets, version, openDoc, openParent, onBackup }) {
   const { params } = route;
   const filters = pick(params);
   const set = (p) => go('/', { ...params, ...p, cp: '', np: '', dp: '' }, { replace: true });
@@ -804,7 +813,7 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent, rem
 
   return (
     <div className="page page-search">
-      <BackupReminder meta={meta} facets={facets} remind={remind} onBackup={onBackup} />
+      <BackupReminder meta={meta} facets={facets} onBackup={onBackup} />
       <div className="search-hero">
         <label className="sr-only" htmlFor="q">
           Search everything filed

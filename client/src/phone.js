@@ -402,8 +402,14 @@ const dropStaging = (f) => native('remove', { folder: where(f), name: STAGING })
 
 // Restore, step 1: reads the chosen file in 4 MB pieces and checks all of it (every entry's size and SHA-256, the
 // database's integrity). Nothing in use is touched: document files go to .restore/ (except those already here with the
-// same bytes), the database stays in memory. If the check fails, only .restore/ is removed. Answers what would be replaced.
-export async function checkRestore(file) {
+// same bytes), the database stays in memory. If the check fails or is cancelled (signal: the dialog was closed), only
+// .restore/ is removed. One check at a time: a new one waits for a cancelled one to clear up. Answers what would be replaced.
+let checking = Promise.resolve();
+export function checkRestore(file, signal) {
+  const run = () => check(file, signal);
+  return (checking = checking.catch(() => {}).then(run));
+}
+async function check(file, signal) {
   await ready;
   await cancelRestore();
   const f = folder;
@@ -411,7 +417,10 @@ export async function checkRestore(file) {
   let here; // names in files/ that already hold exactly the backup's bytes
   let dbBytes;
   async function* pieces() {
-    for (let at = 0; at < file.size; at += PIECE) yield new Uint8Array(await file.slice(at, at + PIECE).arrayBuffer());
+    for (let at = 0; at < file.size; at += PIECE) {
+      if (signal?.aborted) throw new Error('Restore cancelled');
+      yield new Uint8Array(await file.slice(at, at + PIECE).arrayBuffer());
+    }
   }
   try {
     const manifest = await readBackup(pieces(), async (name, size, sha, manifest) => {
@@ -459,7 +468,9 @@ export async function applyRestore() {
   const { bytes, manifest, moves } = staged;
   staged = null;
   for (const [from, to] of moves) await native('rename', { folder: where(folder), from, to });
-  phoneState = await call('import', { bytes, saved: { folder } });
+  // Marked as the phone's own change to the current folder file: if saving it to the folder fails now, the next start
+  // saves the phone's (restored) copy there, rather than opening the folder's old one again.
+  phoneState = await call('import', { bytes, saved: { folder, key: phoneState.saved?.key } });
   await call('noteBackup', { at: manifest.made }); // what is in the app now was backed up then
   await save();
   await dropStaging(folder);

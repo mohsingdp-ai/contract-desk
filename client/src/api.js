@@ -41,10 +41,10 @@ export function uploadFiles(url, files, meta, onProgress) {
 }
 
 // Restore from a backup file: check it (answers what would be replaced), then apply or cancel. On the desktop the file
-// streams to this computer's server; the phone reads it in pieces itself.
-export async function checkRestore(file) {
-  if (isPhone) return phone.checkRestore(file);
-  const res = await fetch('/api/restore', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+// streams to this computer's server; the phone reads it in pieces itself. signal: stop checking (the dialog was closed).
+export async function checkRestore(file, signal) {
+  if (isPhone) return phone.checkRestore(file, signal);
+  const res = await fetch('/api/restore', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file, signal });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `Restore failed (${res.status})`);
   return data;

@@ -106,7 +106,13 @@ export async function readBackup(chunks, open) {
         } catch {
           throw damaged('its manifest is unreadable');
         }
-        if (manifest.app !== 'Contract Desk' || !manifest.files?.['contracts.db']) throw damaged('its manifest is not a Contract Desk one');
+        if (manifest?.app !== 'Contract Desk' || !Number.isInteger(manifest.format) || manifest.format < 1 || !manifest.files?.['contracts.db']) {
+          throw damaged('its manifest is not a Contract Desk one');
+        }
+        // Every name checked before anything is read or written for it: nothing outside the data folder, ever.
+        for (const [name, f] of Object.entries(manifest.files)) {
+          if (!allowed(name) || !Number.isInteger(f?.size) || f.size < 0 || !/^[0-9a-f]{64}$/.test(f.sha256)) throw damaged(`${name} is not a file it may hold`);
+        }
         if (manifest.format > BACKUP_FORMAT) throw new HttpError(400, 'This backup was made by a newer version of Contract Desk. Update the app, then restore it. Nothing was changed.');
       };
     }

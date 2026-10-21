@@ -889,10 +889,11 @@ try {
     return out;
   };
   // A backup put together by hand (to make broken or unusual ones): [[name, bytes]…], listed in a manifest first.
-  const makeBackup = (entries, made = new Date().toISOString()) => {
+  // The archive holds `tar` (normally the same entries the manifest lists).
+  const makeBackup = (entries, made = new Date().toISOString(), tar = entries) => {
     const files = Object.fromEntries(entries.map(([n, b]) => [n, { size: b.length, sha256: sha(b) }]));
     const m = Buffer.from(JSON.stringify({ app: 'Contract Desk', format: 1, appVersion: 'test', from: 'desktop', made, counts: {}, files }));
-    return Buffer.concat([...[['manifest.json', m], ...entries].flatMap(([n, b]) => [tarHeader(n, b.length), b, tarPad(b.length)]), tarEnd()]);
+    return Buffer.concat([...[['manifest.json', m], ...tar].flatMap(([n, b]) => [tarHeader(n, b.length), b, tarPad(b.length)]), tarEnd()]);
   };
   // Everything a restore must bring back: every record (with tags) and the bytes of every file.
   const snapshot = (dir) => ({
@@ -972,20 +973,26 @@ try {
       b[at] ^= 0xff;
       return b;
     };
+    const all = entries.slice(1).map((e) => [e.name, e.data]);
     const variants = {
       'cut off': good.subarray(0, good.length - 1500),
       'a changed byte in the last document': flip(good.indexOf(doc.data) + doc.data.length - 1),
       'a changed byte in the database': flip(good.indexOf(entries[1].data) + 5000),
       'a database that is not healthy (with a matching checksum)': makeBackup([['contracts.db', randomBytes(8192)]]),
       'a path outside the data folder': makeBackup([['contracts.db', entries[1].data], ['files/../escape.pdf', Buffer.from('x')]]),
+      'a listed file missing from the archive': makeBackup(all, undefined, all.slice(0, -1)),
+      'the same file twice': makeBackup(all, undefined, [...all, all.at(-1)]),
       'not a backup at all': Buffer.from('%PDF-1.4 a document, not a backup'),
     };
     for (const [what, bytes] of Object.entries(variants)) {
+      device.calls = [];
       const dialog = await restoreFrom(page, bytes);
       await dialog.getByText(/^This backup file is damaged or is not a Contract Desk backup \(.+\)\. Nothing was changed\.$/).waitFor();
       await dialog.locator('.modal-foot').getByRole('button', { name: 'Close' }).click();
       await dialog.waitFor({ state: 'detached' });
       assert.deepEqual(fs.readdirSync(filesDir), [], `${what}: no file left in files/`);
+      if (what.includes('outside')) assert.ok(!device.calls.includes('hashFiles') && !device.calls.includes('write'), 'refused before reading or writing anything');
+      await until(() => !fs.existsSync(path.join(DEFAULT_DIR, '.restore')), `${what}: no restore copy left`);
       assert.deepEqual(contractNos(DEFAULT_DIR), [], what);
       assert.ok(!fs.existsSync(path.join(storage, 'Documents', 'escape.pdf')) && !fs.existsSync(path.join(DEFAULT_DIR, 'escape.pdf')), what);
     }
@@ -1030,6 +1037,26 @@ try {
     await dialog.getByRole('button', { name: 'Replace with backup' }).click();
     await dialog.waitFor({ state: 'detached' });
     await until(() => sha(fs.readFileSync(x)) === before.files[d.file_path] && !fs.existsSync(staging), 'the backup’s copy in place');
+    assert.deepEqual(snapshot(DEFAULT_DIR), before);
+  });
+
+  await check('closing the restore dialog while the file is still being checked stops it and removes its copy', async () => {
+    const { page } = app;
+    const x = path.join(DEFAULT_DIR, before.documents[0].file_path);
+    fs.writeFileSync(x, 'differs again, so the check writes a copy');
+    const mine = fs.readFileSync(x);
+    device.slow = 300; // a slow phone: the check takes a while
+    const dialog = await restoreFrom(page, fs.readFileSync(backupFile));
+    await dialog.getByText(/^Checking every record and file/).waitFor();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).first().click();
+    await dialog.waitFor({ state: 'detached' });
+    device.slow = 0;
+    await until(() => !fs.existsSync(path.join(DEFAULT_DIR, '.restore')), 'restore copy removed', 20_000);
+    await new Promise((r) => setTimeout(r, 1000)); // nothing comes back once it has stopped
+    assert.ok(!fs.existsSync(path.join(DEFAULT_DIR, '.restore')));
+    assert.deepEqual(fs.readFileSync(x), mine, 'the file in use is untouched');
+    // Put the document's real bytes back for the checks that follow.
+    fs.writeFileSync(x, (await tarEntries(fs.readFileSync(backupFile))).find((e) => e.name === `files/${before.documents[0].storage_name}`).data);
     assert.deepEqual(snapshot(DEFAULT_DIR), before);
   });
 

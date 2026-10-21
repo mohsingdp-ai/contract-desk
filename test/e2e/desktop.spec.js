@@ -197,11 +197,15 @@ test('a backup counts for the reminder only once its file is saved, not when the
     }, file);
   const finished = () => expect.poll(() => app.evaluate(() => global.__download)).not.toBeNull();
   const before = await lastBackup();
+  const reminder = win.getByRole('status').filter({ hasText: 'No backup yet.' });
+  await expect(reminder).toBeVisible();
   await answerSave(null);
   await win.locator('.rail-foot').getByRole('link', { name: 'Back up…' }).click();
   await finished();
   expect(await app.evaluate(() => global.__download)).toBe('cancelled');
   expect(await lastBackup()).toBe(before);
+  await win.waitForTimeout(2500); // past the page's own re-check
+  await expect(reminder).toBeVisible(); // cancelled: still reminded
   const file = path.join(root, 'saved-backup.tar');
   await answerSave(file);
   await win.locator('.rail-foot').getByRole('link', { name: 'Back up…' }).click();
@@ -209,5 +213,7 @@ test('a backup counts for the reminder only once its file is saved, not when the
   expect(await app.evaluate(() => global.__download)).toBe('completed');
   expect(fs.statSync(file).size).toBeGreaterThan(1024);
   await expect.poll(lastBackup).not.toBe(before);
+  await win.evaluate(() => window.dispatchEvent(new Event('focus'))); // the window is back from the save dialog
+  await expect(reminder).toBeHidden();
   await app.close();
 });
