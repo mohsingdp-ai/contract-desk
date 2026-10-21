@@ -7,6 +7,9 @@ export default defineConfig(({ mode }) => {
     root: 'client',
     plugins: [react()],
     build: { outDir: '../dist', emptyOutDir: true },
+    // Phone database worker (sqlite-wasm): settings proven in decision-1.
+    worker: { format: 'es' },
+    optimizeDeps: { exclude: ['@sqlite.org/sqlite-wasm'] },
     server: {
       host: '127.0.0.1',
       proxy: { '/api': `http://127.0.0.1:${env.PORT || 4780}` },

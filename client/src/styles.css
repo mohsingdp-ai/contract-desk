@@ -169,9 +169,14 @@ mark {
 
 .passcode {
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* the box never grows wider than the screen */
   place-items: center;
   min-height: 100vh;
   padding: 16px;
+}
+
+.passcode .modal-foot {
+  flex-wrap: wrap;
 }
 
 .boot {
@@ -410,6 +415,21 @@ mark {
 }
 .rail-folder button:hover {
   border-color: var(--rail-ink);
+}
+.phone-folder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 40px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+}
+.phone-folder code {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-2);
+  word-break: break-all;
 }
 .rail-local {
   display: inline-flex;

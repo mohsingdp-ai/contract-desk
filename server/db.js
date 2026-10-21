@@ -9,6 +9,8 @@ export function openDb(dataDir) {
   const db = new DatabaseSync(path.join(dataDir, 'contracts.db'));
   db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
   setupDb(db);
+  // Closing merges the WAL into contracts.db, so a closed app leaves one complete file that can be copied (e.g. to the phone).
+  process.once('exit', () => db.isOpen && db.close());
   return db;
 }
 

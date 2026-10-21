@@ -9,6 +9,7 @@ import QRCode from 'qrcode';
 import { openDb, openWasmDb } from './db.js';
 import { createRules, errorReply, downloadName, storedName, UPLOAD_LIMITS, HttpError } from '../core/rules.js';
 import { exportWorkbook, exportFileName } from '../core/export.js';
+import { ROUTES } from '../core/routes.js';
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || 'data');
 const PORT = Number(process.env.PORT || 4780);
@@ -146,27 +147,10 @@ app.get('/api/meta', (req, res) => {
   res.json({ categories, dataDir: DATA_DIR, fileTypes, lan: !!LAN_PASSCODE, onThisComputer: isLoopback(req) });
 });
 
-// Categories
-app.get('/api/categories', (req, res) => res.json(rules.listCategories()));
-app.post('/api/categories', (req, res) => res.status(201).json(rules.addCategory(req.body?.name)));
-app.patch('/api/categories/:id', (req, res) => res.json(rules.updateCategory(req.params.id, req.body)));
-app.delete('/api/categories/:id', (req, res) => res.json(rules.deleteCategory(req.params.id, req.query.move_to)));
-
-app.get('/api/facets', (req, res) => res.json(rules.facets()));
-
-// Contracts
-app.get('/api/contracts', (req, res) => res.json(rules.listContracts(req.query)));
-app.post('/api/contracts', (req, res) => res.status(201).json(rules.createContract(req.body)));
-app.get('/api/contracts/:id', (req, res) => res.json(rules.getContract(req.params.id)));
-app.put('/api/contracts/:id', (req, res) => res.json(rules.updateContract(req.params.id, req.body)));
-app.delete('/api/contracts/:id', (req, res) => res.json(rules.deleteContract(req.params.id)));
-
-// NOCs
-app.get('/api/nocs', (req, res) => res.json(rules.listNocs(req.query)));
-app.post('/api/nocs', (req, res) => res.status(201).json(rules.createNoc(req.body)));
-app.get('/api/nocs/:id', (req, res) => res.json(rules.getNoc(req.params.id)));
-app.put('/api/nocs/:id', (req, res) => res.json(rules.updateNoc(req.params.id, req.body)));
-app.delete('/api/nocs/:id', (req, res) => res.json(rules.deleteNoc(req.params.id)));
+// Contracts, NOCs, documents, categories and facets: the route table is shared with the phone app.
+for (const [method, route, handler, status = 200] of ROUTES) {
+  app[method.toLowerCase()](route, (req, res) => res.status(status).json(handler(rules, req.params, req.query, req.body)));
+}
 
 // Uploads: multer streams the files to disk, then the shared rules record them (or remove them all on any problem).
 const upload = multer({
@@ -188,12 +172,6 @@ const handleUpload = (parentType) => [
 
 app.post('/api/contracts/:id/documents', ...handleUpload('contract'));
 app.post('/api/nocs/:id/documents', ...handleUpload('noc'));
-
-// Documents
-app.get('/api/documents', (req, res) => res.json(rules.listDocuments(req.query)));
-app.get('/api/documents/:id', (req, res) => res.json(rules.getDocument(req.params.id)));
-app.patch('/api/documents/:id', (req, res) => res.json(rules.updateDocument(req.params.id, req.body)));
-app.delete('/api/documents/:id', (req, res) => res.json(rules.deleteDocument(req.params.id)));
 
 app.get('/api/documents/:id/file{/:name}', (req, res, next) => {
   const doc = rules.getDocument(req.params.id);
@@ -231,6 +209,8 @@ app.use((err, req, res, next) => {
 const sweep = rules.sweepOrphans();
 if (sweep.removed) console.log(`Removed ${sweep.removed} orphaned file(s) from ${FILES_DIR}`);
 if (sweep.missing.length) console.warn(`Warning: ${sweep.missing.length} document(s) point to missing files:`, sweep.missing.join(', '));
+// Ctrl+C / kill: exit normally so the database is closed (see openDb).
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => process.exit(0));
 // Resolves once listening; the desktop app awaits this, and a busy port rejects it (e.g. EADDRINUSE).
 export const ready = new Promise((resolve, reject) => {
   const server = app.listen(PORT, HOST, () => {

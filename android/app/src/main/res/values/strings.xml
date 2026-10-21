@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Contract Desk</string>
+    <string name="title_activity_main">Contract Desk</string>
+    <string name="package_name">com.contractdesk.app</string>
+    <string name="custom_url_scheme">com.contractdesk.app</string>
+</resources>

@@ -195,3 +195,7 @@ Gotchas for later tasks:
 - **Documents live in the data folder's `files/`** (same as desktop), never only in app-private storage.
 - **Same folder open on PC and phone at once is unsupported**: README must say so (copy the folder while the desktop app is closed).
 - Play Store: decided later by the owner (TASK-9). GitHub-release APK uses All files access with the picker as fallback.
+- **Change marker is size + SHA-256 of the file contents, not size + modified time** (found in TASK-2): after a rename this phone
+  sometimes reports the old file's modified time, which made a restart discard an unsaved change.
+- Android's automatic app backup is off: the data folder is the backup, and an auto-restored stale WebView database could
+  otherwise win over the folder.

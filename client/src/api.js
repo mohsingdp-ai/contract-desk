@@ -1,4 +1,9 @@
+import { isPhone, request } from './phone.js';
+
+export { isPhone };
+
 export async function api(method, url, body) {
+  if (isPhone) return request(method, url, body); // the phone has no server: its database worker answers
   const res = await fetch(url, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : {},

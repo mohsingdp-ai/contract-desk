@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, qs, fmtAmount, fmtDate } from './api.js';
+import { api, qs, fmtAmount, fmtDate, isPhone } from './api.js';
+import * as phone from './phone.js';
 import { Icon, Hl, Modal, Confirm, Field, Pager, DocRow, UploadDialog, DocDrawer, DeleteDocConfirm } from './ui.jsx';
 
 // ---------- hash routing: #/path?query ----------
@@ -62,6 +63,14 @@ export default function App() {
   const { data: meta } = useData('/api/meta', version); // categories can change while the app is open
   const { data: facets } = useData('/api/facets', version);
   const [needPasscode, setNeedPasscode] = useState(false);
+  const [phoneStatus, setPhoneStatus] = useState(phone.status);
+  useEffect(() => {
+    if (!isPhone) return;
+    const on = () => setPhoneStatus(phone.status);
+    window.addEventListener('phone-status', on);
+    phone.start();
+    return () => window.removeEventListener('phone-status', on);
+  }, []);
   useEffect(() => {
     const on = () => setNeedPasscode(true);
     window.addEventListener('passcode-required', on);
@@ -81,6 +90,7 @@ export default function App() {
   }, [route, go]);
 
   if (needPasscode) return <PasscodeScreen />;
+  if (isPhone && phoneStatus.name !== 'ready') return <PhoneSetup status={phoneStatus} />;
   if (!meta || !facets) return <div className="boot">Opening the desk…</div>;
 
   const { doc, ...params } = route.params;
@@ -152,6 +162,58 @@ function PasscodeScreen() {
           <button className="btn btn-primary">Unlock</button>
         </footer>
       </form>
+    </div>
+  );
+}
+
+// Phone app: shown until the data folder is ready (first run, All files access turned off, or a WebView too old).
+function PhoneSetup({ status }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const run = (fn) => async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await fn();
+    } catch (err) {
+      setError(err.message);
+    }
+    setBusy(false);
+  };
+  if (status.name === 'starting') return <div className="boot">Opening the desk…</div>;
+  if (status.name === 'webview')
+    return (
+      <div className="passcode">
+        <div className="modal">
+          <header className="modal-head">
+            <h2>Update Android System WebView</h2>
+          </header>
+          <div className="modal-body">
+            <p>This phone’s Android System WebView is too old for the Contract Desk database.</p>
+            <p>Open the Play Store, search for “Android System WebView”, tap Update, then open Contract Desk again.</p>
+          </div>
+        </div>
+      </div>
+    );
+  return (
+    <div className="passcode">
+      <div className="modal">
+        <header className="modal-head">
+          <h2>Where to keep your records</h2>
+        </header>
+        <div className="modal-body">
+          <p>Contract Desk keeps your records in a folder on the phone, so they stay safe even if the app is removed. Allow ‘All files access’, or choose a folder.</p>
+          {(error || status.message) && <p className="form-error">{error || status.message}</p>}
+        </div>
+        <footer className="modal-foot">
+          <button className="btn" disabled={busy} onClick={run(phone.chooseFolder)}>
+            Choose folder
+          </button>
+          <button className="btn btn-primary" disabled={busy} onClick={run(phone.requestAccess)}>
+            Allow All files access
+          </button>
+        </footer>
+      </div>
     </div>
   );
 }
@@ -238,6 +300,9 @@ function ThemeSwitch() {
   );
 }
 
+// Phone: switch the data folder with the system folder picker (decision-2), then reload the desk from it.
+const changePhoneFolder = () => phone.chooseFolder().then((changed) => changed && location.reload(), (err) => alert(err.message));
+
 function Rail({ section, facets, meta }) {
   const n = (v) => v.toLocaleString();
   return (
@@ -280,6 +345,11 @@ function Rail({ section, facets, meta }) {
           <span className="rail-folder">
             <button onClick={() => window.desktop.openDataFolder()}>Open</button>
             <button onClick={() => window.desktop.chooseDataFolder()}>Change…</button>
+          </span>
+        )}
+        {isPhone && (
+          <span className="rail-folder">
+            <button onClick={changePhoneFolder}>Change…</button>
           </span>
         )}
         <span className="rail-local">{meta.lan ? 'Wi-Fi access on · passcode' : 'Local only · offline'}</span>
@@ -367,6 +437,7 @@ function FilterBar({ params, set, facets, meta, show }) {
 }
 
 function ExportLink({ scope, filters, label = 'Export to Excel' }) {
+  if (isPhone) return null; // phone export comes with TASK-4
   const { sort, ...f } = filters;
   const filtered = Object.keys(f).length > 0;
   return (
@@ -478,7 +549,8 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
   const searching = Object.keys(filters).length > 0;
   const contractOnly = CONTRACT_ONLY.some((k) => params[k]);
   const inputRef = useRef();
-  useEffect(() => inputRef.current?.focus(), []);
+  // Not on the phone app: the keyboard would cover half the screen on every launch.
+  useEffect(() => void (!isPhone && inputRef.current?.focus()), []);
 
   const sections = [
     {
@@ -598,6 +670,16 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
             </section>
           ))}
         </div>
+      )}
+      {/* Phones hide the sidebar footer, so the data folder control sits here. */}
+      {isPhone && (
+        <footer className="phone-folder">
+          <span className="kicker">Data folder</span>
+          <code>{meta.dataDir}</code>
+          <button className="btn btn-sm" onClick={changePhoneFolder}>
+            Change folder…
+          </button>
+        </footer>
       )}
     </div>
   );
@@ -762,8 +844,9 @@ function DeleteRecordConfirm({ kind, no, docs, onConfirm, onClose }) {
         <>
           <p>
             <strong>
-              This also deletes all {docs.length} attached document
-              {docs.length > 1 ? 's' : ''} and permanently removes {docs.length > 1 ? 'their files' : 'its file'} from your data folder:
+              {docs.length > 1
+                ? `This also deletes all ${docs.length} attached documents and permanently removes their files from your data folder:`
+                : 'This also deletes its attached document and permanently removes its file from your data folder:'}
             </strong>
           </p>
           <ul className="confirm-list">
@@ -790,9 +873,11 @@ function DocGroup({ title, docs, onAdd, onOpenDoc, onDelete }) {
         <h3>{title}</h3>
         <span className="mono dim">{docs.length}</span>
         <span className="spacer" />
-        <button className="btn btn-sm" onClick={onAdd}>
-          <Icon name="plus" size={14} /> Add
-        </button>
+        {!isPhone && (
+          <button className="btn btn-sm" onClick={onAdd}>
+            <Icon name="plus" size={14} /> Add
+          </button>
+        )}
       </header>
       {docs.length > 0 && (
         <ul className="doc-list">
@@ -839,9 +924,11 @@ function ContractDetail({ id, go, meta, facets, version, bump, openDoc, tagNames
           <h1 className="ident-xl">{c.contract_no}</h1>
         </div>
         <div className="page-actions">
-          <button className="btn btn-primary" onClick={() => setModal({ upload: '' })}>
-            <Icon name="upload" /> Add documents
-          </button>
+          {!isPhone && (
+            <button className="btn btn-primary" onClick={() => setModal({ upload: '' })}>
+              <Icon name="upload" /> Add documents
+            </button>
+          )}
           <button className="btn" onClick={() => setModal({ edit: true })}>
             <Icon name="edit" /> Edit
           </button>
@@ -1186,9 +1273,11 @@ function NocDetail({ id, go, version, bump, openDoc, tagNames, meta }) {
           <h1 className="ident-xl">{n.indent_no}</h1>
         </div>
         <div className="page-actions">
-          <button className="btn btn-primary" onClick={() => setModal({ upload: true })}>
-            <Icon name="upload" /> Add documents
-          </button>
+          {!isPhone && (
+            <button className="btn btn-primary" onClick={() => setModal({ upload: true })}>
+              <Icon name="upload" /> Add documents
+            </button>
+          )}
           <button className="btn" onClick={() => setModal({ edit: true })}>
             <Icon name="edit" /> Edit
           </button>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { api, uploadFiles, fmtDate, fmtSize, tagKey, fileUrl } from './api.js';
+import { api, uploadFiles, fmtDate, fmtSize, tagKey, fileUrl, isPhone } from './api.js';
+import { docSrc } from './phone.js';
 
 const ICONS = {
   search: 'M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Zm5.3-2.2L21 21',
@@ -235,9 +236,11 @@ export function DocRow({ doc, q, showParent, onOpenDoc, onOpenParent, onDelete }
         <button className="btn-icon" onClick={onOpenDoc} title={doc.file_type === 'excel' ? 'Details' : 'Preview'} aria-label="Open">
           <Icon name={doc.file_type === 'excel' ? 'sheet' : 'search'} />
         </button>
-        <a className="btn-icon" href={fileUrl(doc.id, true)} title="Download" aria-label="Download">
-          <Icon name="download" />
-        </a>
+        {!isPhone && (
+          <a className="btn-icon" href={fileUrl(doc.id, true)} title="Download" aria-label="Download">
+            <Icon name="download" />
+          </a>
+        )}
         {onDelete && (
           <button className="btn-icon btn-icon-danger" onClick={onDelete} title="Delete" aria-label="Delete">
             <Icon name="trash" />
@@ -455,27 +458,34 @@ export function DocDrawer({ id, meta, tagSuggestions, onClose, onChanged, onOpen
                   <div className="preview-excel preview-pdf">
                     <Icon name="open" size={36} />
                     <p>Phones can't show PDFs inside a page.</p>
-                    <a className="btn btn-primary" href={fileUrl(doc.id, false, doc.display_name)} target="_blank" rel="noreferrer">
-                      <Icon name="open" /> Open PDF
-                    </a>
+                    {!isPhone && (
+                      <a className="btn btn-primary" href={fileUrl(doc.id, false, doc.display_name)} target="_blank" rel="noreferrer">
+                        <Icon name="open" /> Open PDF
+                      </a>
+                    )}
                   </div>
                 ))}
-              {doc.file_type === 'image' && <img src={fileUrl(doc.id)} alt={doc.display_name} />}
+              {doc.file_type === 'image' && <img src={isPhone ? docSrc(doc.file_path) : fileUrl(doc.id)} alt={doc.display_name} />}
               {doc.file_type === 'excel' && (
                 <div className="preview-excel">
                   <Icon name="sheet" size={40} />
                   <p>Spreadsheets have no in-app preview.</p>
-                  <a className="btn btn-primary" href={fileUrl(doc.id, true)}>
-                    <Icon name="download" /> Download {doc.original_name.split('.').pop().toUpperCase()}
-                  </a>
+                  {!isPhone && (
+                    <a className="btn btn-primary" href={fileUrl(doc.id, true)}>
+                      <Icon name="download" /> Download {doc.original_name.split('.').pop().toUpperCase()}
+                    </a>
+                  )}
                 </div>
               )}
             </div>
+            {/* Phone: opening and sharing files comes with TASK-3. */}
             <div className="drawer-actions">
-              <a className="btn" href={fileUrl(doc.id, true)}>
-                <Icon name="download" /> Download
-              </a>
-              {(doc.file_type === 'image' || (doc.file_type === 'pdf' && inlinePdf)) && (
+              {!isPhone && (
+                <a className="btn" href={fileUrl(doc.id, true)}>
+                  <Icon name="download" /> Download
+                </a>
+              )}
+              {!isPhone && (doc.file_type === 'image' || (doc.file_type === 'pdf' && inlinePdf)) && (
                 <a className="btn" href={fileUrl(doc.id, false, doc.display_name)} target="_blank" rel="noreferrer">
                   <Icon name="open" /> Open in new tab
                 </a>

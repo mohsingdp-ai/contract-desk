@@ -11,12 +11,14 @@
     "build": "vite build",
     "start": "node --env-file-if-exists=.env server/index.js",
     "dev": "node --env-file-if-exists=.env --watch server/index.js & vite",
-    "test": "node test/acceptance.mjs && node test/acceptance.mjs wasm",
+    "test": "node test/acceptance.mjs && node test/acceptance.mjs wasm && node test/phone.mjs",
     "test:e2e": "playwright test",
     "app": "vite build && electron .",
     "dist": "vite build && electron-builder --linux AppImage --win nsis",
     "dist:linux": "vite build && electron-builder --linux AppImage",
     "dist:win": "vite build && electron-builder --win nsis",
+    "android:build": "vite build && cap sync android && cd android && ./gradlew assembleDebug",
+    "android:install": "\"$ANDROID_HOME/platform-tools/adb\" install -r android/app/build/outputs/apk/debug/app-debug.apk",
     "demo:video": "node scripts/record-demo.mjs",
     "test:e2e:watch": "WATCH=1 playwright test test/e2e/app.spec.js test/e2e/categories.spec.js"
   },
@@ -27,6 +29,9 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/cli": "8.5.3",
+    "@capacitor/core": "8.5.3",
     "@fontsource-variable/archivo": "^5.2.0",
     "@fontsource/red-hat-mono": "^5.2.0",
     "@playwright/test": "^1.64.1",

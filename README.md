@@ -50,10 +50,12 @@ npm start              # http://127.0.0.1:4780   (settings: copy .env.example to
 | --- | --- |
 | `npm run dev` | Server with auto-restart + Vite dev server |
 | `npm run app` | Run the desktop app without packaging |
-| `npm test` | API acceptance checks, run twice: with the desktop database and with the phone's (SQLite WebAssembly) |
+| `npm test` | API acceptance checks, run twice: with the desktop database and with the phone's (SQLite WebAssembly); then the Android app's web bundle in Chromium (phone database, data folder, start-up copy rules) |
 | `npm run test:e2e` | Browser UI tests: desktop, phone, Wi-Fi, desktop app (run `npm run build` first) |
 | `npm run dist:linux` | Build the Linux AppImage into `release/` |
 | `npm run demo:video` | Re-record the walkthrough video |
+| `npm run android:build` | Build the Android app (debug APK). Needs JDK 21 in `JAVA_HOME` and the Android SDK in `ANDROID_HOME` |
+| `npm run android:install` | Install that APK on the phone connected by USB |
 
 **Releases:** push a version tag (`git tag v1.0.1 && git push --tags`) and GitHub builds the Windows and Linux installers and publishes them.
 
@@ -64,6 +66,11 @@ npm start              # http://127.0.0.1:4780   (settings: copy .env.example to
 - `server/`: Express API (desktop-only parts: Wi-Fi passcode, QR pairing, file streaming).
 - `client/`: React UI.
 - `electron/`: desktop app.
+- `android/`: Android app (Capacitor). Same screens; a database worker (`client/src/phone-worker.js`) answers instead of the
+  server, and `client/src/phone.js` keeps its saved copy in the data folder (default `Documents/Contract Desk`).
 - `test/`: API and UI tests.
 
 Don't put your own files in the data folder's `files/` subfolder: at startup the app removes files there that no record points to.
+
+A data folder can be copied between computer and phone. Close Contract Desk on the computer first, and don't open the same
+folder on both at once (for example through a synced cloud folder): one side's latest changes can be lost.
