@@ -431,8 +431,7 @@ mark {
   gap: 8px 14px;
   margin: 0 0 18px;
   padding: 10px 14px;
-  border: 1px solid var(--rule);
-  border-left: 3px solid var(--signal);
+  border: 1px solid var(--signal);
   font-size: 13.5px;
 }
 .phone-folder {
