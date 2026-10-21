@@ -234,6 +234,14 @@ export async function requestAccess() {
   await connect();
 }
 
+// What the data folder takes (database + documents) and what is free on the phone, for the storage line and warning.
+export const LOW_SPACE = 500 * 1024 * 1024;
+export async function space() {
+  await ready;
+  const [db, docs, { free }] = await Promise.all([stat(folder, DB), call('filePaths'), native('freeSpace', { path: folder.path })]);
+  return { used: db.size + docs.reduce((n, d) => n + d.size_bytes, 0), free };
+}
+
 const count = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const describe = (c) => `${count(c.contracts, 'contract')}, ${count(c.nocs, 'NOC')}, ${count(c.documents, 'document')}`;
 

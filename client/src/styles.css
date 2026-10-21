@@ -175,6 +175,13 @@ mark {
   padding: 16px;
 }
 
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 100; /* above dialogs and the document drawer */
+  background: var(--paper);
+}
+
 .passcode .modal-foot {
   flex-wrap: wrap;
 }
@@ -430,6 +437,25 @@ mark {
   font-size: 12px;
   color: var(--ink-2);
   word-break: break-all;
+}
+.phone-space,
+.phone-full,
+.phone-lock {
+  flex-basis: 100%;
+  font-size: 13px;
+}
+.phone-lock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.phone-lock input {
+  width: 20px;
+  height: 20px;
+}
+.phone-lock .dim {
+  flex-basis: 100%;
 }
 .rail-local {
   display: inline-flex;

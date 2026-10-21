@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api, uploadFiles, fmtDate, fmtSize, tagKey, fileUrl, isPhone } from './api.js';
-import { docSrc } from './phone.js';
+import { docSrc, space, LOW_SPACE } from './phone.js';
 
 const ICONS = {
   search: 'M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Zm5.3-2.2L21 21',
@@ -254,6 +254,27 @@ export function DocRow({ doc, q, showParent, onOpenDoc, onOpenParent, onDelete }
 const ACCEPT = '.pdf,.png,.jpg,.jpeg,.gif,.webp,.bmp,.xlsx,.xlsm,.xls,.csv';
 const stem = (name) => name.replace(/\.[^.]+$/, '');
 
+// Phone only: what the data folder uses and what is free, with a clear warning when the phone is nearly full.
+export function PhoneSpace({ warnOnly }) {
+  const [s, setS] = useState(null);
+  useEffect(() => void space().then(setS, (err) => console.error('Could not check free space', err)), []);
+  if (!s) return null;
+  return (
+    <>
+      {!warnOnly && (
+        <span className="phone-space">
+          Uses {fmtSize(s.used)} · {fmtSize(s.free)} free on the phone
+        </span>
+      )}
+      {s.free < LOW_SPACE && (
+        <p className="form-error phone-full">
+          The phone is nearly full: only {fmtSize(s.free)} free. Free up space before adding documents, or they may not save.
+        </p>
+      )}
+    </>
+  );
+}
+
 export function UploadDialog({ parent, categories, initialCategory, tagSuggestions, onDone, onClose }) {
   const isContract = parent.type === 'contract';
   const [rows, setRows] = useState([]);
@@ -295,6 +316,7 @@ export function UploadDialog({ parent, categories, initialCategory, tagSuggestio
   return (
     <Modal title={`Add documents to ${parent.no}`} onClose={onClose} wide>
       <div className="modal-body">
+        {isPhone && <PhoneSpace warnOnly />}
         <div
           className={`dropzone ${drag ? 'is-drag' : ''}`}
           onDragOver={(e) => (e.preventDefault(), setDrag(true))}

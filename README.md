@@ -68,6 +68,8 @@ npm start              # http://127.0.0.1:4780   (settings: copy .env.example to
 - `electron/`: desktop app.
 - `android/`: Android app (Capacitor). Same screens; a database worker (`client/src/phone-worker.js`) answers instead of the
   server, and `client/src/phone.js` keeps its saved copy in the data folder (default `Documents/Contract Desk`).
+  `client/src/phone-app.js`: the back button and the optional fingerprint lock. Icon and launch screen come from
+  `client/public` (`sh scripts/android-icons.sh`, needs ImageMagick).
 - `test/`: API and UI tests.
 
 Don't put your own files in the data folder's `files/` subfolder: at startup the app removes files there that no record points to.
