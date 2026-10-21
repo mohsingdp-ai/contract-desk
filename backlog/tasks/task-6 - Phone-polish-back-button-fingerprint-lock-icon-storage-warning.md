@@ -4,7 +4,7 @@ title: 'Phone polish: back button, fingerprint lock, icon, storage warning'
 status: Review
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 11:44'
+updated_date: '2026-10-21 12:26'
 labels:
   - android
 milestone: m-0
@@ -38,6 +38,8 @@ Real-phone check (S24+, 2026-10-21):
 - Back button: dialog (keyboard closes first, then dialog), document drawer, contract -> Contracts -> Search, and exit only from Search: all as designed.
 - Lock: fingerprint enrolled. Turning the switch on asks for fingerprint first (prompt 'Contract Desk / Unlock your records / Use PIN'); cancelling leaves it off. With the switch on: prompt on cold start; cancel -> 'Contract Desk is locked' screen with Unlock (retries); back on the lock screen exits; 'Use PIN' opens the phone PIN entry; prompt again after 3+ min in the background. Not done: an actual fingerprint/PIN success (can't via adb; owner's PIN). AC #5 left for the owner's final fingerprint tap.
 - test/phone.mjs lock check (line ~372) is flaky: 1 failure in 4 runs ('Unlock' button detached while clicking: the auto-unlock races with bioFail=false).
+
+Fixed (flaky lock check): the test now waits until the lock screen's own automatic fingerprint ask has reached the phone (and failed) before letting the fingerprint match, at both lock-screen appearances. Before: 3 of 8 runs failed at the same line; after: 10 of 10 runs passed.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

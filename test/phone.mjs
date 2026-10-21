@@ -351,9 +351,13 @@ try {
   await check('fingerprint lock: asks on opening and after a while in the background; back exits; a half-filled form survives it', async () => {
     await quit();
     device.bioFail = true;
+    device.calls = [];
     const page = await launch('install-1');
     const lock = page.locator('.lock-screen');
     await page.getByRole('heading', { name: 'Contract Desk is locked' }).waitFor();
+    // The lock screen asks by itself as soon as it shows. Only once that ask has reached the phone (and failed) may the
+    // fingerprint start matching, or that first ask unlocks and there is no Unlock button left to press.
+    await until(() => device.calls.includes('internalAuthenticate'), 'the lock screen asks for a fingerprint by itself');
     await page.locator('#q').waitFor({ state: 'attached' }); // the desk opens underneath…
     assert.ok(await page.evaluate(() => !!document.elementFromPoint(200, 300).closest('.lock-screen')), '…but stays covered');
     await back(page);
@@ -367,8 +371,10 @@ try {
     await away(page, 10_000); // a short switch to another app: still open
     assert.equal(await lock.count(), 0);
     device.bioFail = true;
+    device.calls = [];
     await away(page, 4 * 60_000);
     await page.getByRole('heading', { name: 'Contract Desk is locked' }).waitFor();
+    await until(() => device.calls.includes('internalAuthenticate'), 'the lock screen asks again by itself'); // see above
     device.bioFail = false;
     await page.getByRole('button', { name: 'Unlock' }).click();
     await lock.waitFor({ state: 'detached' });
