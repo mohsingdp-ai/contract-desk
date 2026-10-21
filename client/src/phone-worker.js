@@ -63,7 +63,7 @@ const state = () => {
 };
 
 // A copy of a database file, opened in memory: its record counts if it is a whole, healthy Contract Desk database, else null.
-function inspect(bytes) {
+function inMemory(bytes) {
   const copy = new Uint8Array(bytes);
   copy[18] = copy[19] = 1; // a desktop file is in WAL mode, which an in-memory copy can't open
   const mem = new sqlite3.oo1.DB(':memory:');
@@ -71,6 +71,16 @@ function inspect(bytes) {
     const p = sqlite3.wasm.allocFromTypedArray(copy);
     const flags = sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE | sqlite3.capi.SQLITE_DESERIALIZE_RESIZEABLE;
     mem.checkRc(sqlite3.capi.sqlite3_deserialize(mem, 'main', p, copy.length, copy.length, flags));
+    return mem;
+  } catch (err) {
+    mem.close();
+    throw err;
+  }
+}
+function inspect(bytes) {
+  let mem;
+  try {
+    mem = inMemory(bytes);
     if (mem.selectValue('PRAGMA integrity_check') !== 'ok') return null;
     const counts = mem.selectObject(COUNTS_SQL); // throws without the app's tables
     setupDb(wrapWasmDb(sqlite3, mem)); // what opening it will do, tried on the copy: importing it can't trip over it
@@ -78,7 +88,7 @@ function inspect(bytes) {
   } catch {
     return null; // e.g. not a database, or without the contracts table
   } finally {
-    mem.close();
+    mem?.close();
   }
 }
 const healthy = (bytes) => !!inspect(bytes);
@@ -109,6 +119,31 @@ const ops = {
       open();
     }
     ops.setSaved({ saved: { ...saved, gen: state().gen } });
+    return state();
+  },
+  // A checked backup replaces the phone database. The copy is prepared first, in memory, so the database that lands is
+  // already complete: its last-backup time (when the backup was made) and a change counter one above the saved marker,
+  // i.e. "the folder copy doesn't have these records yet". A kill at any point leaves either the old database or this
+  // one, and with this one the next start saves it to the folder before tidying files (never the other way round).
+  restore({ bytes, saved, at }) {
+    const mem = inMemory(bytes);
+    try {
+      const m = wrapWasmDb(sqlite3, mem);
+      m.exec(SYNC_STATE);
+      setupDb(m);
+      createRules({ db: m, files: {} }).noteBackup(at);
+      const { gen } = mem.selectObject('SELECT gen FROM sync_state WHERE id = 1');
+      m.prepare('UPDATE sync_state SET gen = ?, saved = ? WHERE id = 1').run(gen + 1, JSON.stringify({ ...saved, gen }));
+      bytes = sqlite3.capi.sqlite3_js_db_export(mem);
+    } finally {
+      mem.close();
+    }
+    wdb.close();
+    try {
+      pool.importDb(NAME, bytes);
+    } finally {
+      open();
+    }
     return state();
   },
   export() {

@@ -332,10 +332,11 @@ app.post('/api/restore/apply', async (req, res) => {
   applying = true;
   try {
     for (const n of fs.readdirSync(path.join(r.dir, 'files'))) fs.renameSync(path.join(r.dir, 'files', n), path.join(FILES_DIR, n));
-    db.close(); // merges and removes the WAL; a leftover one must not be applied to the restored file
-    for (const f of [`${DB_FILE}-wal`, `${DB_FILE}-shm`]) fs.rmSync(f, { force: true });
+    const dropWal = () => [`${DB_FILE}-wal`, `${DB_FILE}-shm`].forEach((f) => fs.rmSync(f, { force: true }));
     let aside = false;
     try {
+      db.close(); // merges and removes the WAL; a leftover one must not be applied to the restored file
+      dropWal();
       fs.renameSync(DB_FILE, ASIDE);
       aside = true;
       fs.renameSync(path.join(r.dir, 'contracts.db'), DB_FILE);
@@ -343,6 +344,7 @@ app.post('/api/restore/apply', async (req, res) => {
     } catch (err) {
       if (aside) {
         fs.rmSync(DB_FILE, { recursive: true, force: true });
+        dropWal(); // the failed restored database's, which must not be applied to the current one
         fs.renameSync(ASIDE, DB_FILE);
       }
       await openRecords();

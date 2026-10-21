@@ -468,10 +468,10 @@ export async function applyRestore() {
   const { bytes, manifest, moves } = staged;
   staged = null;
   for (const [from, to] of moves) await native('rename', { folder: where(folder), from, to });
-  // Marked as the phone's own change to the current folder file: if saving it to the folder fails now, the next start
-  // saves the phone's (restored) copy there, rather than opening the folder's old one again.
-  phoneState = await call('import', { bytes, saved: { folder, key: phoneState.saved?.key } });
-  await call('noteBackup', { at: manifest.made }); // what is in the app now was backed up then
+  // One step (see 'restore' in phone-worker.js): the restored database lands marked as the phone's own unsaved change to
+  // the current folder file, with the backup's time as the last backup. If the app dies before the save below finishes,
+  // the next start saves the phone's (restored) copy to the folder, rather than opening the folder's old one again.
+  phoneState = await call('restore', { bytes, saved: { folder, key: phoneState.saved?.key }, at: manifest.made });
   await save();
   await dropStaging(folder);
   const { names } = await native('list', { folder: where(folder), dir: 'files' });

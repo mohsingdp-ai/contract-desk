@@ -4,7 +4,7 @@ title: Backup and restore (phone and desktop)
 status: Review
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 12:36'
+updated_date: '2026-10-21 13:04'
 labels:
   - android
   - desktop
@@ -46,6 +46,8 @@ Review fixes (round 2):
 - Phone: after the restored database is imported, it is marked as the phone's own change to the current folder file, so if the folder save fails the next start saves the phone copy instead of reopening the old one.
 - Uploads are refused (409) while a desktop restore is switching.
 - Fixed a race found by the Electron test: the server read the client address after the connection closed (cancelled download) and noted the backup; it now decides at request start.
+
+Last review nits: phone restore now replaces the database in ONE worker step ('restore'): the copy is prepared in memory first (set-up, last-backup time, change counter one above the saved marker), then imported, so a kill at any point leaves either the old database or one marked as not yet in the folder; the next start saves it before tidying files. Desktop apply: closing the DB and removing -wal/-shm are inside the recovery block; on failure the restored DB's -wal/-shm are removed before the old one goes back. Tests: phone kill right after the restore step (before the folder save) -> next start saves the restored records with all their files; desktop start-up recovery (set-aside only -> put back; both -> set-aside removed). Counts: acceptance 28/27, phone 50, e2e 42.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

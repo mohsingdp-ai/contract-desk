@@ -32,7 +32,8 @@ await build({ configFile: path.resolve('vite.config.js'), logLevel: 'error', bui
 
 // ---------- the "phone" ----------
 
-// die: 'before' / 'after' makes the next contracts.db replace hang before / after it happens, so the test can "kill" the app there.
+// die: 'before' / 'after' makes the next contracts.db replace hang before / after it happens, so the test can "kill" the app there;
+// 'save': the first write of a new folder copy hangs (killed before saving anything).
 // bio: what the fingerprint / face check reports; bioFail: the next fingerprint doesn't match (or is cancelled).
 // writes: pieces written to files/; failWrite: the n-th next write to files/ fails (phone storage full); opened/shared:
 // what the phone's own apps were handed.
@@ -64,6 +65,7 @@ const plugin = {
     return s ? { exists: true, size: s.size, mtime: Math.floor(s.mtimeMs) } : { exists: false, size: 0, mtime: 0 };
   },
   write: ({ folder, name, data, append }) => {
+    if (device.die === 'save' && name === 'contracts.db.tmp') return hang(); // killed as the folder copy starts being written
     const bytes = Buffer.from(data, 'base64');
     assert.ok(bytes.length <= 4 * 1024 * 1024, `a ${bytes.length}-byte write: big writes crash the app (decision-1)`);
     if (name.startsWith('files/')) {
@@ -1058,6 +1060,28 @@ try {
     // Put the document's real bytes back for the checks that follow.
     fs.writeFileSync(x, (await tarEntries(fs.readFileSync(backupFile))).find((e) => e.name === `files/${before.documents[0].storage_name}`).data);
     assert.deepEqual(snapshot(DEFAULT_DIR), before);
+  });
+
+  await check('killed right after a restore replaced the phone database, before the folder copy was saved: the next start saves the restored records there', async () => {
+    const { page } = app;
+    await addContract(page, 'NOT-IN-BACKUP');
+    await page.getByRole('heading', { name: 'NOT-IN-BACKUP' }).waitFor();
+    await until(() => contractNos(DEFAULT_DIR).includes('NOT-IN-BACKUP'), 'saved to the folder');
+    await page.goto(BASE);
+    const dialog = await restoreFrom(page, fs.readFileSync(backupFile));
+    await dialog.getByText(/^After restoring: /).waitFor();
+    device.hung = false;
+    device.die = 'save';
+    await dialog.getByRole('button', { name: 'Replace with backup' }).click();
+    await until(() => device.hung, 'the restore reaching the folder save');
+    await quit();
+    device.die = null;
+    assert.ok(contractNos(DEFAULT_DIR).includes('NOT-IN-BACKUP'), 'the folder copy still holds the old records');
+    const again = await launch('install-9');
+    await until(() => assert.deepEqual(snapshot(DEFAULT_DIR), before) ?? true, 'the restored records saved to the folder, every file they list there');
+    await again.goto(`${BASE}#/contracts`);
+    await again.getByText(before.contracts[0].contract_no).first().waitFor();
+    assert.equal(await again.getByText('NOT-IN-BACKUP').count(), 0);
   });
 
   await check('a phone backup restores on the desktop, and a desktop backup restores on the phone (also a Windows one: WAL mode, files\\name paths)', async () => {

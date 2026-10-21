@@ -508,6 +508,32 @@ try {
     assert.deepEqual(await everything(), before);
   });
 
+  await check('start-up after a crash during a restore switch: only the set-aside database → it goes back; both → the set-aside one goes', async () => {
+    const [m, d] = await tarEntries(backup);
+    const counts = JSON.parse(m.data).counts;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contract-desk-aside-'));
+    const aside = path.join(dir, 'contracts.db.before-restore');
+    let s5;
+    const start = async () => {
+      s5 = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, DATA_DIR: dir, PORT: '4796', LAN_PASSCODE: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
+      await new Promise((resolve) => s5.stdout.on('data', (b) => String(b).includes('running at') && resolve()));
+      return (await (await fetch('http://127.0.0.1:4796/api/facets')).json()).counts;
+    };
+    const stop = () => new Promise((resolve) => (s5.on('exit', resolve), s5.kill()));
+    try {
+      fs.writeFileSync(aside, d.data); // crashed after moving the current database aside, before the restored one arrived
+      assert.deepEqual(await start(), counts, 'the set-aside database is back in place');
+      assert.ok(!fs.existsSync(aside));
+      await stop();
+      fs.writeFileSync(aside, 'the replaced database'); // crashed after the restored one arrived
+      assert.deepEqual(await start(), counts, 'the restored database is kept');
+      assert.ok(!fs.existsSync(aside));
+    } finally {
+      await stop();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   await check('a restore whose switch fails puts the current database back: the server keeps serving the current records', async () => {
     const aside = path.join(dataDir, 'contracts.db.before-restore');
     const state = await everything();
