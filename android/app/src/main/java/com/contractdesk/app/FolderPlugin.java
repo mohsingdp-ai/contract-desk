@@ -29,6 +29,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.math.BigInteger;
+import java.security.MessageDigest;
+import org.json.JSONObject;
 
 /**
  * The data folder (decision-2): "All files access" and the system folder picker, plus the few file operations the
@@ -206,8 +209,9 @@ public class FolderPlugin extends Plugin {
         }
     }
 
-    // Replaces "to" with "from". Plain paths: one atomic rename. Picker links can't rename over a file, so the old
-    // one is deleted first; a crash in between leaves only the .tmp, which start-up recovers.
+    // Replaces "to" with "from" (also into another sub-folder, e.g. a restored file from ".restore/x" to "files/x").
+    // Plain paths: one atomic rename. Picker links can't rename over a file, so the old one is deleted first; a crash in
+    // between leaves only the .tmp, which start-up recovers.
     @PluginMethod
     public void rename(PluginCall call) {
         String folder = call.getString("folder");
@@ -216,7 +220,15 @@ public class FolderPlugin extends Plugin {
         try {
             if (isTree(folder)) {
                 if (treeExists(folder, to)) DocumentsContract.deleteDocument(cr(), doc(folder, to));
-                if (DocumentsContract.renameDocument(cr(), doc(folder, from), to) == null) throw new IOException("Could not rename " + from);
+                Uri src = doc(folder, from);
+                if (!dirOf(from).equals(dirOf(to))) {
+                    src = DocumentsContract.moveDocument(cr(), src, doc(folder, dirOf(from)), doc(folder, dirOf(to)));
+                    if (src == null) throw new IOException("Could not move " + from);
+                }
+                String name = to.substring(to.lastIndexOf('/') + 1);
+                if (!from.endsWith("/" + name) && !from.equals(name) && DocumentsContract.renameDocument(cr(), src, name) == null) {
+                    throw new IOException("Could not rename " + from);
+                }
             } else if (!new File(folder, from).renameTo(new File(folder, to))) {
                 throw new IOException("Could not rename " + from + " to " + to);
             }
@@ -226,6 +238,12 @@ public class FolderPlugin extends Plugin {
         }
     }
 
+    private static String dirOf(String name) {
+        int slash = name.lastIndexOf('/');
+        return slash < 0 ? "" : name.substring(0, slash);
+    }
+
+    // A file, or a folder with everything in it (a picker link's folder is deleted with its contents by Android).
     @PluginMethod
     public void remove(PluginCall call) {
         String folder = call.getString("folder");
@@ -235,6 +253,8 @@ public class FolderPlugin extends Plugin {
                 if (treeExists(folder, name)) DocumentsContract.deleteDocument(cr(), doc(folder, name));
             } else {
                 File f = new File(folder, name);
+                File[] inside = f.listFiles();
+                if (inside != null) for (File c : inside) c.delete(); // one level: what the app puts in a folder it removes
                 if (f.exists() && !f.delete()) throw new IOException("Could not delete " + name);
             }
             call.resolve();
@@ -319,6 +339,65 @@ public class FolderPlugin extends Plugin {
         if (photos != null) for (File f : photos) f.delete();
     }
 
+    // ---------- backup (format in core/backup.js; the app sends the small parts, the files never cross the bridge) ----------
+
+    // Size and SHA-256 of each named file in a folder, in order; { exists: false } for a missing one.
+    @PluginMethod
+    public void hashFiles(PluginCall call) {
+        String folder = call.getString("folder");
+        try {
+            JSArray names = call.getArray("names");
+            JSArray files = new JSArray();
+            byte[] buf = new byte[1 << 16];
+            for (int i = 0; i < names.length(); i++) {
+                JSObject f = new JSObject();
+                try (InputStream in = openIn(folder, names.getString(i))) {
+                    MessageDigest md = MessageDigest.getInstance("SHA-256");
+                    long size = 0;
+                    for (int n; (n = in.read(buf)) > 0; size += n) md.update(buf, 0, n);
+                    f.put("exists", true);
+                    f.put("size", size);
+                    f.put("sha256", String.format("%064x", new BigInteger(1, md.digest())));
+                } catch (FileNotFoundException e) {
+                    f.put("exists", false);
+                }
+                files.put(f);
+            }
+            JSObject r = new JSObject();
+            r.put("files", files);
+            call.resolve(r);
+        } catch (Exception e) {
+            call.reject(e.getMessage(), e);
+        }
+    }
+
+    // Appends parts to the file "to"/"name": { data } (base64, small) or { folder, name } (a whole file, copied here).
+    // Returns the bytes written for each part.
+    @PluginMethod
+    public void append(PluginCall call) {
+        try (OutputStream out = openOut(call.getString("to"), call.getString("name"), true)) {
+            JSArray parts = call.getArray("parts");
+            JSArray sizes = new JSArray();
+            for (int i = 0; i < parts.length(); i++) {
+                JSONObject p = parts.getJSONObject(i);
+                if (p.has("data")) {
+                    byte[] b = Base64.decode(p.getString("data"), Base64.DEFAULT);
+                    out.write(b);
+                    sizes.put(b.length);
+                } else {
+                    try (InputStream in = openIn(p.getString("folder"), p.getString("name"))) {
+                        sizes.put(pump(in, out));
+                    }
+                }
+            }
+            JSObject r = new JSObject();
+            r.put("sizes", sizes);
+            call.resolve(r);
+        } catch (Exception e) {
+            call.reject(e.getMessage(), e);
+        }
+    }
+
     private static long pump(InputStream in, OutputStream out) throws IOException {
         byte[] buf = new byte[1 << 16];
         long total = 0;
@@ -359,8 +438,9 @@ public class FolderPlugin extends Plugin {
     }
 
     // The system share sheet. The file goes as a copy named "as" in the app's cache, so the receiving app shows the
-    // document's name rather than the stored random one. Each share replaces the previous copy.
-    // ponytail: the last shared copy stays in the cache until the next share (or Android clears it); fine below 500 MB.
+    // document's name rather than the stored random one. Each share replaces the previous copy. move: the file is
+    // already a copy in the cache (a backup), so it is moved there instead of copied: no second copy of a big file.
+    // ponytail: the last shared copy stays in the cache until the next share (or Android clears it).
     @PluginMethod
     public void share(PluginCall call) {
         File dir = new File(getContext().getCacheDir(), "shared");
@@ -369,8 +449,11 @@ public class FolderPlugin extends Plugin {
             if (old != null) for (File f : old) f.delete();
             if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("Could not create " + dir.getPath());
             File copy = new File(dir, call.getString("as"));
-            try (InputStream in = openIn(call.getString("folder"), call.getString("name")); OutputStream out = new FileOutputStream(copy)) {
-                pump(in, out);
+            boolean moved = call.getBoolean("move", false) && new File(call.getString("folder"), call.getString("name")).renameTo(copy);
+            if (!moved) {
+                try (InputStream in = openIn(call.getString("folder"), call.getString("name")); OutputStream out = new FileOutputStream(copy)) {
+                    pump(in, out);
+                }
             }
             Uri uri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", copy);
             Intent send = new Intent(Intent.ACTION_SEND).setType(call.getString("mime")).putExtra(Intent.EXTRA_STREAM, uri);

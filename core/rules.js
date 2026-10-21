@@ -373,7 +373,15 @@ export function createRules({ db, files }) {
   }
 
   return {
-    meta: () => ({ categories: categoryNames(), fileTypes: Object.keys(FILE_TYPES) }),
+    meta: () => ({
+      categories: categoryNames(),
+      fileTypes: Object.keys(FILE_TYPES),
+      lastBackup: db.prepare(`SELECT value FROM app_state WHERE key = 'last_backup'`).get()?.value || null,
+    }),
+    // When a backup was last made (or, after a restore, when the restored backup was made): drives the reminder.
+    noteBackup(at) {
+      db.prepare(`INSERT INTO app_state (key, value) VALUES ('last_backup', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`).run(at);
+    },
 
     // Categories (editable per-contract checklist)
     listCategories,

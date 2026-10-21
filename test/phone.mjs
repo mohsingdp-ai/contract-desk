@@ -10,8 +10,10 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { openDb } from '../server/db.js';
+import { readTar, tarEnd, tarHeader, tarPad } from '../core/backup.js';
 import { createRules, storedName } from '../core/rules.js';
 import { callRoute } from '../core/routes.js';
 import { DEFAULT_CATEGORIES, tx } from '../core/schema.js';
@@ -30,7 +32,8 @@ await build({ configFile: path.resolve('vite.config.js'), logLevel: 'error', bui
 
 // ---------- the "phone" ----------
 
-// die: 'before' / 'after' makes the next contracts.db replace hang before / after it happens, so the test can "kill" the app there.
+// die: 'before' / 'after' makes the next contracts.db replace hang before / after it happens, so the test can "kill" the app there;
+// 'save': the first write of a new folder copy hangs (killed before saving anything).
 // bio: what the fingerprint / face check reports; bioFail: the next fingerprint doesn't match (or is cancelled).
 // writes: pieces written to files/; failWrite: the n-th next write to files/ fails (phone storage full); opened/shared:
 // what the phone's own apps were handed.
@@ -62,12 +65,14 @@ const plugin = {
     return s ? { exists: true, size: s.size, mtime: Math.floor(s.mtimeMs) } : { exists: false, size: 0, mtime: 0 };
   },
   write: ({ folder, name, data, append }) => {
+    if (device.die === 'save' && name === 'contracts.db.tmp') return hang(); // killed as the folder copy starts being written
     const bytes = Buffer.from(data, 'base64');
     assert.ok(bytes.length <= 4 * 1024 * 1024, `a ${bytes.length}-byte write: big writes crash the app (decision-1)`);
     if (name.startsWith('files/')) {
       if (device.failWrite && !--device.failWrite) throw new Error('No space left on device');
       device.writes.push({ folder, name, size: bytes.length, append });
     }
+    fs.mkdirSync(path.dirname(disk(folder, name)), { recursive: true });
     (append ? fs.appendFileSync : fs.writeFileSync)(disk(folder, name), bytes);
   },
   rename: ({ folder, from, to }) => {
@@ -75,7 +80,7 @@ const plugin = {
     fs.renameSync(disk(folder, from), disk(folder, to));
     if (device.die === 'after' && to === 'contracts.db') return hang();
   },
-  remove: ({ folder, name }) => fs.rmSync(disk(folder, name), { force: true }),
+  remove: ({ folder, name }) => fs.rmSync(disk(folder, name), { recursive: true, force: true }), // a file, or a folder with its files
   list: ({ folder, dir }) => ({ names: fs.existsSync(disk(folder, dir)) ? fs.readdirSync(disk(folder, dir)) : [] }),
   copy: ({ from, to, name }) => (fs.copyFileSync(disk(from, name), disk(to, name)), { bytes: fs.statSync(disk(to, name)).size }),
   cacheFolder: () => (fs.mkdirSync(disk(`${PHONE_ROOT}/app-cache`), { recursive: true }), { path: `${PHONE_ROOT}/app-cache` }), // really under /data/user/0
@@ -92,7 +97,24 @@ const plugin = {
     fs.copyFileSync(disk(folder, name), path.join(storage, 'Download', as));
     return { name: as };
   },
-  share: ({ folder, name, as, mime }) => void (device.shared = { folder, bytes: fs.readFileSync(disk(folder, name)), as, mime }),
+  share: ({ folder, name, as, mime, move }) => {
+    device.shared = { folder, bytes: fs.readFileSync(disk(folder, name)), as, mime };
+    if (move) fs.rmSync(disk(folder, name)); // moved into the share folder, not copied
+  },
+  hashFiles: ({ folder, names }) => ({
+    files: names.map((n) => {
+      const f = disk(folder, n);
+      return fs.existsSync(f) ? { exists: true, size: fs.statSync(f).size, sha256: createHash('sha256').update(fs.readFileSync(f)).digest('hex') } : { exists: false };
+    }),
+  }),
+  append: ({ to, name, parts }) => ({
+    sizes: parts.map((p) => {
+      const bytes = p.data !== undefined ? Buffer.from(p.data, 'base64') : fs.readFileSync(disk(p.folder, p.name));
+      if (p.data !== undefined) assert.ok(bytes.length <= 4 * 1024 * 1024, 'small parts only: files are copied by the phone');
+      fs.appendFileSync(disk(to, name), bytes);
+      return bytes.length;
+    }),
+  }),
 };
 // @capacitor-community/file-opener: hands the file to the phone's own app.
 const fileOpener = { open: ({ filePath, contentType }) => void (device.opened = { filePath, bytes: fs.readFileSync(uriFile(filePath)), contentType }) };
@@ -872,6 +894,263 @@ try {
     await quit();
   });
 
+  // ---------- backup and restore (TASK-5) ----------
+
+  const sha = (b) => createHash('sha256').update(b).digest('hex');
+  const tarEntries = async (bytes) => {
+    const out = [];
+    await readTar([bytes], (name) => {
+      const parts = [];
+      return (p) => void (p ? parts.push(Buffer.from(p)) : out.push({ name, data: Buffer.concat(parts) }));
+    });
+    return out;
+  };
+  // A backup put together by hand (to make broken or unusual ones): [[name, bytes]…], listed in a manifest first.
+  // The archive holds `tar` (normally the same entries the manifest lists).
+  const makeBackup = (entries, made = new Date().toISOString(), tar = entries) => {
+    const files = Object.fromEntries(entries.map(([n, b]) => [n, { size: b.length, sha256: sha(b) }]));
+    const m = Buffer.from(JSON.stringify({ app: 'Contract Desk', format: 1, appVersion: 'test', from: 'desktop', made, counts: {}, files }));
+    return Buffer.concat([...[['manifest.json', m], ...tar].flatMap(([n, b]) => [tarHeader(n, b.length), b, tarPad(b.length)]), tarEnd()]);
+  };
+  // Everything a restore must bring back: every record (with tags) and the bytes of every file.
+  const snapshot = (dir) => ({
+    contracts: folderDb(dir, 'SELECT * FROM contracts ORDER BY id'),
+    nocs: folderDb(dir, 'SELECT * FROM nocs ORDER BY id'),
+    documents: folderDb(dir, `SELECT d.*, (SELECT group_concat(t.name, '|') FROM document_tags dt JOIN tags t ON t.id = dt.tag_id WHERE dt.document_id = d.id) AS tags FROM documents d ORDER BY d.id`),
+    categories: folderDb(dir, 'SELECT * FROM categories ORDER BY id'),
+    files: Object.fromEntries(folderDb(dir, 'SELECT file_path FROM documents').map(({ file_path }) => [file_path, sha(fs.readFileSync(path.join(dir, file_path)))])),
+  });
+  const restoreFrom = async (page, bytes) => {
+    const file = path.join(tmp, 'chosen.tar');
+    fs.writeFileSync(file, bytes);
+    await page.locator('input[aria-label="Backup file"]').first().setInputFiles(file);
+    return page.getByRole('dialog', { name: 'Restore from a backup' });
+  };
+  const backupFile = path.join(tmp, 'phone-backup.tar');
+  let before; // the records when the phone backup was made
+
+  await check('back up on the phone: reminded until then; built in 4 MB pieces with each document copied by the phone itself; saved to Downloads and shared', async () => {
+    device.access = true;
+    const page = await launch('install-7');
+    await page.getByText('No backup yet.').waitFor();
+    before = snapshot(DEFAULT_DIR);
+    assert.ok(before.contracts.length && before.nocs.length && before.documents.length >= 2, 'records and files to back up');
+    device.calls = [];
+    device.shared = null;
+    await page.locator('.phone-folder').getByRole('button', { name: 'Back up…' }).click();
+    await page.getByText(/Backup saved in Downloads as contract-desk-backup-\d{4}-\d\d-\d\d\.tar/).waitFor();
+    await page.getByText('No backup yet.').waitFor({ state: 'detached' });
+    const { as, mime, bytes } = device.shared;
+    assert.match(as, /^contract-desk-backup-\d{4}-\d\d-\d\d\.tar$/);
+    assert.equal(mime, 'application/x-tar');
+    assert.deepEqual(fs.readFileSync(path.join(storage, 'Download', as)), bytes, 'the same backup is in Downloads, outside the app');
+    assert.ok(!fs.existsSync(path.join(storage, 'app-cache', as)), 'moved to the share menu, not left as an extra copy');
+    const entries = await tarEntries(bytes);
+    const manifest = JSON.parse(entries[0].data);
+    assert.deepEqual(entries.slice(0, 2).map((e) => e.name), ['manifest.json', 'contracts.db']);
+    assert.equal(entries[1].data[18], 1, 'database in rollback mode');
+    assert.deepEqual(entries.slice(2).map((e) => e.name).sort(), before.documents.map((d) => `files/${d.storage_name}`).sort());
+    for (const e of entries.slice(1)) assert.equal(sha(e.data), manifest.files[e.name].sha256, e.name);
+    for (const d of before.documents) assert.equal(sha(entries.find((e) => e.name === `files/${d.storage_name}`).data), before.files[d.file_path]);
+    assert.deepEqual(manifest.counts, { contracts: before.contracts.length, nocs: before.nocs.length, documents: before.documents.length });
+    assert.equal(manifest.from, 'phone');
+    assert.deepEqual(device.calls.filter((c) => ['hashFiles', 'append'].includes(c)), ['hashFiles', 'append'], 'documents go in batches, not one bridge call each');
+    await until(() => folderDb(DEFAULT_DIR, `SELECT value FROM app_state WHERE key = 'last_backup'`).length === 1, 'last backup time kept in the database');
+    fs.writeFileSync(backupFile, bytes);
+  });
+
+  await check('restore on the phone checks the whole file, then says what is replaced and asks; "Keep current records" changes nothing', async () => {
+    const { page } = app;
+    await addContract(page, 'AFTER-BACKUP');
+    await page.getByRole('heading', { name: 'AFTER-BACKUP' }).waitFor();
+    await until(() => contractNos(DEFAULT_DIR).includes('AFTER-BACKUP'), 'AFTER-BACKUP saved');
+    const names = fs.readdirSync(filesDir).sort();
+    await page.goto(BASE);
+    const dialog = await restoreFrom(page, fs.readFileSync(backupFile));
+    const [c, n, d] = [before.contracts.length, before.nocs.length, before.documents.length];
+    await dialog.getByText(`Now: ${c + 1} contracts, ${n} NOCs, ${d} documents`).waitFor();
+    await dialog.getByText(`After restoring: ${c} contracts, ${n} NOCs, ${d} documents`).waitFor();
+    await dialog.getByText('Everything now in Contract Desk is replaced').waitFor();
+    await dialog.getByRole('button', { name: 'Keep current records' }).click();
+    await dialog.waitFor({ state: 'detached' });
+    assert.ok(contractNos(DEFAULT_DIR).includes('AFTER-BACKUP'));
+    assert.deepEqual(fs.readdirSync(filesDir).sort(), names);
+    await quit();
+  });
+
+  await check('a damaged backup is rejected on the phone; nothing changes and no file it wrote is left behind', async () => {
+    fs.rmSync(DEFAULT_DIR, { recursive: true }); // the app and its folder wiped: every document file in the backup is new here
+    const page = await launch('install-9');
+    await page.getByRole('heading', { name: 'The desk is empty.' }).waitFor();
+    const good = fs.readFileSync(backupFile);
+    const entries = await tarEntries(good);
+    const doc = entries.at(-1);
+    const flip = (at) => {
+      const b = Buffer.from(good);
+      b[at] ^= 0xff;
+      return b;
+    };
+    const all = entries.slice(1).map((e) => [e.name, e.data]);
+    const variants = {
+      'cut off': good.subarray(0, good.length - 1500),
+      'a changed byte in the last document': flip(good.indexOf(doc.data) + doc.data.length - 1),
+      'a changed byte in the database': flip(good.indexOf(entries[1].data) + 5000),
+      'a database that is not healthy (with a matching checksum)': makeBackup([['contracts.db', randomBytes(8192)]]),
+      'a path outside the data folder': makeBackup([['contracts.db', entries[1].data], ['files/../escape.pdf', Buffer.from('x')]]),
+      'a listed file missing from the archive': makeBackup(all, undefined, all.slice(0, -1)),
+      'the same file twice': makeBackup(all, undefined, [...all, all.at(-1)]),
+      'not a backup at all': Buffer.from('%PDF-1.4 a document, not a backup'),
+    };
+    for (const [what, bytes] of Object.entries(variants)) {
+      device.calls = [];
+      const dialog = await restoreFrom(page, bytes);
+      await dialog.getByText(/^This backup file is damaged or is not a Contract Desk backup \(.+\)\. Nothing was changed\.$/).waitFor();
+      await dialog.locator('.modal-foot').getByRole('button', { name: 'Close' }).click();
+      await dialog.waitFor({ state: 'detached' });
+      assert.deepEqual(fs.readdirSync(filesDir), [], `${what}: no file left in files/`);
+      if (what.includes('outside')) assert.ok(!device.calls.includes('hashFiles') && !device.calls.includes('write'), 'refused before reading or writing anything');
+      await until(() => !fs.existsSync(path.join(DEFAULT_DIR, '.restore')), `${what}: no restore copy left`);
+      assert.deepEqual(contractNos(DEFAULT_DIR), [], what);
+      assert.ok(!fs.existsSync(path.join(storage, 'Documents', 'escape.pdf')) && !fs.existsSync(path.join(DEFAULT_DIR, 'escape.pdf')), what);
+    }
+    await page.getByRole('heading', { name: 'The desk is empty.' }).waitFor();
+  });
+
+  await check('wipe the app and its folder, then restore: every record, tag and file comes back', async () => {
+    const { page } = app;
+    const dialog = await restoreFrom(page, fs.readFileSync(backupFile));
+    await dialog.getByText('Now: 0 contracts, 0 NOCs, 0 documents').waitFor();
+    await dialog.getByRole('button', { name: 'Replace with backup' }).click();
+    await page.getByRole('heading', { name: 'The desk is empty.' }).waitFor({ state: 'detached' }); // reloaded with the records
+    await until(() => assert.deepEqual(snapshot(DEFAULT_DIR), before) ?? true, 'every record and file in the folder copy, as backed up');
+    await page.goto(`${BASE}#/contracts/${before.contracts[0].id}`);
+    await page.getByRole('heading', { name: before.contracts[0].contract_no }).waitFor();
+    await page.goto(BASE);
+    await page.locator('#q').waitFor();
+    assert.equal(await page.getByText(/No backup yet|Last backup/).count(), 0, 'restored data counts as backed up');
+  });
+
+  await check('a restore never touches a file in use before the yes: a changed file stays as it is (damaged backup, or "Keep"); after yes the backup’s copy replaces it', async () => {
+    const { page } = app;
+    const d = before.documents[0];
+    const x = path.join(DEFAULT_DIR, d.file_path);
+    fs.writeFileSync(x, 'this phone’s own, different bytes');
+    const mine = fs.readFileSync(x);
+    const staging = path.join(DEFAULT_DIR, '.restore');
+    const good = fs.readFileSync(backupFile);
+    let dialog = await restoreFrom(page, good.subarray(0, good.length - 1500)); // damaged: cut off after the files were read
+    await dialog.getByText(/^This backup file is damaged/).waitFor();
+    await dialog.locator('.modal-foot').getByRole('button', { name: 'Close' }).click();
+    assert.deepEqual(fs.readFileSync(x), mine, 'damaged backup: the file in use is untouched');
+    await until(() => !fs.existsSync(staging), 'staging folder removed');
+    dialog = await restoreFrom(page, good);
+    await dialog.getByText(/^After restoring: /).waitFor();
+    assert.deepEqual(fs.readFileSync(x), mine, 'checked, not yet confirmed: untouched');
+    assert.ok(fs.existsSync(path.join(staging, d.storage_name)), 'the backup’s copy waits in .restore/');
+    await dialog.getByRole('button', { name: 'Keep current records' }).click();
+    await until(() => !fs.existsSync(staging), 'staging folder removed after "Keep"');
+    assert.deepEqual(fs.readFileSync(x), mine);
+    dialog = await restoreFrom(page, good);
+    await dialog.getByRole('button', { name: 'Replace with backup' }).click();
+    await dialog.waitFor({ state: 'detached' });
+    await until(() => sha(fs.readFileSync(x)) === before.files[d.file_path] && !fs.existsSync(staging), 'the backup’s copy in place');
+    assert.deepEqual(snapshot(DEFAULT_DIR), before);
+  });
+
+  await check('closing the restore dialog while the file is still being checked stops it and removes its copy', async () => {
+    const { page } = app;
+    const x = path.join(DEFAULT_DIR, before.documents[0].file_path);
+    fs.writeFileSync(x, 'differs again, so the check writes a copy');
+    const mine = fs.readFileSync(x);
+    device.slow = 300; // a slow phone: the check takes a while
+    const dialog = await restoreFrom(page, fs.readFileSync(backupFile));
+    await dialog.getByText(/^Checking every record and file/).waitFor();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).first().click();
+    await dialog.waitFor({ state: 'detached' });
+    device.slow = 0;
+    await until(() => !fs.existsSync(path.join(DEFAULT_DIR, '.restore')), 'restore copy removed', 20_000);
+    await new Promise((r) => setTimeout(r, 1000)); // nothing comes back once it has stopped
+    assert.ok(!fs.existsSync(path.join(DEFAULT_DIR, '.restore')));
+    assert.deepEqual(fs.readFileSync(x), mine, 'the file in use is untouched');
+    // Put the document's real bytes back for the checks that follow.
+    fs.writeFileSync(x, (await tarEntries(fs.readFileSync(backupFile))).find((e) => e.name === `files/${before.documents[0].storage_name}`).data);
+    assert.deepEqual(snapshot(DEFAULT_DIR), before);
+  });
+
+  await check('killed right after a restore replaced the phone database, before the folder copy was saved: the next start saves the restored records there', async () => {
+    const { page } = app;
+    await addContract(page, 'NOT-IN-BACKUP');
+    await page.getByRole('heading', { name: 'NOT-IN-BACKUP' }).waitFor();
+    await until(() => contractNos(DEFAULT_DIR).includes('NOT-IN-BACKUP'), 'saved to the folder');
+    await page.goto(BASE);
+    const dialog = await restoreFrom(page, fs.readFileSync(backupFile));
+    await dialog.getByText(/^After restoring: /).waitFor();
+    device.hung = false;
+    device.die = 'save';
+    await dialog.getByRole('button', { name: 'Replace with backup' }).click();
+    await until(() => device.hung, 'the restore reaching the folder save');
+    await quit();
+    device.die = null;
+    assert.ok(contractNos(DEFAULT_DIR).includes('NOT-IN-BACKUP'), 'the folder copy still holds the old records');
+    const again = await launch('install-9');
+    await until(() => assert.deepEqual(snapshot(DEFAULT_DIR), before) ?? true, 'the restored records saved to the folder, every file they list there');
+    await again.goto(`${BASE}#/contracts`);
+    await again.getByText(before.contracts[0].contract_no).first().waitFor();
+    assert.equal(await again.getByText('NOT-IN-BACKUP').count(), 0);
+  });
+
+  await check('a phone backup restores on the desktop, and a desktop backup restores on the phone (also a Windows one: WAL mode, files\\name paths)', async () => {
+    const dir = path.join(tmp, 'desk-restore');
+    const desk = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, DATA_DIR: dir, PORT: '4798', LAN_PASSCODE: '', DB_ENGINE: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
+    try {
+      await new Promise((resolve) => desk.stdout.on('data', (b) => String(b).includes('running at') && resolve()));
+      const D = 'http://127.0.0.1:4798';
+      const checked = await fetch(`${D}/api/restore`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: fs.readFileSync(backupFile) });
+      assert.equal(checked.status, 200, await checked.clone().text());
+      assert.equal((await fetch(`${D}/api/restore/apply`, { method: 'POST' })).status, 200);
+      assert.deepEqual(snapshot(dir), before, 'the desktop has exactly the phone’s records and files');
+      // The desktop adds a record with a file, then backs up.
+      const c = await (await fetch(`${D}/api/contracts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"contract_no":"DESK-BACKUP","amount":5,"currency":"USD"}' })).json();
+      const fd = new FormData();
+      fd.append('files', new Blob([Buffer.from('%PDF-1.4 desktop file')]), 'desk.pdf');
+      fd.append('meta', JSON.stringify([{ category: 'Commercial Invoice', reference_no: 'REF-DESK', tags: ['Desk'] }]));
+      assert.equal((await fetch(`${D}/api/contracts/${c.id}/documents`, { method: 'POST', body: fd })).status, 201);
+      const deskBackup = Buffer.from(await (await fetch(`${D}/api/backup`)).arrayBuffer());
+      const want = snapshot(dir);
+
+      const { page } = app;
+      let dialog = await restoreFrom(page, deskBackup);
+      await dialog.getByText('made', { exact: false }).getByText(/on a computer/).waitFor();
+      await dialog.getByRole('button', { name: 'Replace with backup' }).click();
+      await dialog.waitFor({ state: 'detached' });
+      await until(() => assert.deepEqual(snapshot(DEFAULT_DIR), want) ?? true, 'the desktop records and files on the phone');
+
+      // The same backup as a Windows desktop makes it: database in WAL mode, paths stored as files\name; made 20 days ago.
+      const entries = await tarEntries(deskBackup);
+      const winDb = path.join(tmp, 'windows.db');
+      fs.writeFileSync(winDb, entries[1].data);
+      const w = new DatabaseSync(winDb);
+      w.exec(`UPDATE documents SET file_path = replace(file_path, '/', char(92))`);
+      w.close();
+      const wal = fs.readFileSync(winDb);
+      assert.ok(wal.includes('files\\'), 'backslash paths in the database');
+      wal[18] = wal[19] = 2;
+      await addContract(page, 'GONE-AFTER-RESTORE');
+      await page.getByRole('heading', { name: 'GONE-AFTER-RESTORE' }).waitFor();
+      await until(() => contractNos(DEFAULT_DIR).includes('GONE-AFTER-RESTORE'), 'saved before the restore');
+      dialog = await restoreFrom(page, makeBackup([['contracts.db', wal], ...entries.slice(2).map((e) => [e.name, e.data])], new Date(Date.now() - 20 * 864e5).toISOString()));
+      await dialog.getByRole('button', { name: 'Replace with backup' }).click();
+      await dialog.waitFor({ state: 'detached' });
+      await until(() => assert.deepEqual(snapshot(DEFAULT_DIR), want) ?? true, 'the WAL-mode database opened on the phone');
+      assert.equal(fs.readFileSync(path.join(DEFAULT_DIR, 'contracts.db'))[18], 1, 'switched to the phone’s journal mode');
+      await page.goto(BASE);
+      await page.getByText('Last backup 20 days ago.').waitFor(); // the reminder: no backup in the last 14 days
+    } finally {
+      desk.kill();
+      await quit();
+    }
+  });
+
   // ---------- search, filters, paging and Excel export on 3,000 contracts (TASK-4) ----------
 
   // The same folder is opened by the phone and by the desktop rules; every answer must match exactly.
@@ -1043,6 +1322,36 @@ try {
     }
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
     console.log(report.map((r) => `      ${r}`).join('\n'));
+    await quit();
+  });
+
+  await check('backup of 3,000 contracts and 10,000 files (two of 64 MB): the files never pass through the app\'s memory', async () => {
+    const docs = folderDb(DEFAULT_DIR, 'SELECT id, file_path FROM documents ORDER BY id');
+    for (const d of docs) fs.writeFileSync(path.join(DEFAULT_DIR, d.file_path), d.id <= 2 ? randomBytes(64 * 1024 * 1024) : `sample file ${d.id}`);
+    const page = await launch('install-8');
+    await page.locator('#q').waitFor();
+    const cdp = await app.context.newCDPSession(page);
+    let peak = 0;
+    let polling = true;
+    const poll = (async () => {
+      while (polling) (peak = Math.max(peak, (await cdp.send('Runtime.getHeapUsage')).usedSize)), await new Promise((r) => setTimeout(r, 50));
+    })();
+    device.calls = [];
+    device.shared = null;
+    const t0 = Date.now();
+    await page.locator('.phone-folder').getByRole('button', { name: 'Back up…' }).click();
+    await page.getByText(/Backup saved in Downloads/).waitFor({ timeout: 120_000 });
+    polling = false;
+    await poll;
+    const { bytes } = device.shared;
+    const entries = await tarEntries(bytes);
+    assert.equal(entries.length, 2 + docs.length);
+    const manifest = JSON.parse(entries[0].data);
+    for (const e of entries.slice(1)) assert.equal(sha(e.data), manifest.files[e.name].sha256, e.name);
+    const calls = device.calls.filter((c) => ['hashFiles', 'append', 'write'].includes(c)).length;
+    console.log(`      ${(bytes.length / 2 ** 20).toFixed(0)} MB backup in ${((Date.now() - t0) / 1000).toFixed(1)} s, ${calls} bridge calls, page memory peak ${(peak / 2 ** 20).toFixed(0)} MB`);
+    assert.ok(calls < 120, `${calls} bridge calls: documents go in batches`);
+    assert.ok(peak < 64 * 2 ** 20, `page memory peaked at ${(peak / 2 ** 20).toFixed(0)} MB for a ${(bytes.length / 2 ** 20).toFixed(0)} MB backup`);
     await quit();
   });
 

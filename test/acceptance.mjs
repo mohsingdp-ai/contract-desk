@@ -8,6 +8,9 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
+import { readTar, tarEnd, tarHeader, tarPad } from '../core/backup.js';
 
 // `node test/acceptance.mjs wasm` runs every check against the phone's SQLite build (sqlite-wasm) instead of node:sqlite.
 if (process.argv[2] === 'wasm') process.env.DB_ENGINE = 'wasm';
@@ -378,6 +381,246 @@ try {
     }
   });
 
+  // ---------- backup and restore ----------
+
+  const sha = (b) => createHash('sha256').update(b).digest('hex');
+  const tarEntries = async (bytes) => {
+    const out = [];
+    await readTar([bytes], (name) => {
+      const parts = [];
+      return (p) => void (p ? parts.push(Buffer.from(p)) : out.push({ name, data: Buffer.concat(parts) }));
+    });
+    return out;
+  };
+  const restore = async (bytes, base = BASE) => {
+    const r = await fetch(`${base}/api/restore`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes });
+    return { status: r.status, body: await r.json() };
+  };
+  // Every record (with tags and Reference No.) and the bytes of every file.
+  const everything = async () => {
+    const all = async (list) => (await api('GET', `/api/${list}?page_size=100`)).body.items;
+    const docs = await all('documents');
+    return {
+      contracts: await all('contracts'),
+      nocs: await all('nocs'),
+      documents: docs,
+      categories: (await api('GET', '/api/categories')).body,
+      files: Object.fromEntries(docs.map((d) => [d.storage_name, sha(fs.readFileSync(path.join(dataDir, d.file_path)))])),
+    };
+  };
+  let backup, before;
+  const staging = path.join(dataDir, '.restore');
+  const noStaging = () => !fs.existsSync(staging) || fs.readdirSync(staging).length === 0; // no restore copy left behind
+
+  await check('backup: one archive, manifest first, the database in rollback mode and every stored file; the time is kept', async () => {
+    const c = (await api('POST', '/api/contracts', { contract_no: 'BK-1', project_name: 'Backup', firm_name: 'Oakline Ltd', amount: 77, currency: 'USD' })).body;
+    await api('POST', `/api/contracts/${c.id}/documents`, form([['bk.pdf', PDF], ['bk.png', PNG]], [{ category: 'Commercial Invoice', reference_no: 'REF-BK-1', tags: ['Kept'] }, { category: 'Packing List' }]));
+    const n = (await api('POST', '/api/nocs', { indent_no: 'Ind-BK', noc_name: 'Backup NOC' })).body;
+    await api('POST', `/api/nocs/${n.id}/documents`, form([['bk-noc.xlsx', XLSX]], [{ tags: ['Kept'] }]));
+    assert.equal((await api('GET', '/api/meta')).body.lastBackup, null);
+    before = await everything();
+
+    const res = await fetch(`${BASE}/api/backup`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-disposition'), /attachment; filename="?contract-desk-backup-\d{4}-\d\d-\d\d\.tar"?/);
+    backup = Buffer.from(await res.arrayBuffer());
+    const entries = await tarEntries(backup);
+    assert.deepEqual(entries.slice(0, 2).map((e) => e.name), ['manifest.json', 'contracts.db']);
+    assert.deepEqual(entries.slice(2).map((e) => e.name).sort(), before.documents.map((d) => `files/${d.storage_name}`).sort());
+    const manifest = JSON.parse(entries[0].data);
+    assert.equal(manifest.format, 1);
+    assert.equal(manifest.from, 'desktop');
+    assert.deepEqual(manifest.counts, (await api('GET', '/api/facets')).body.counts);
+    for (const e of entries.slice(1)) assert.equal(sha(e.data), manifest.files[e.name].sha256, e.name);
+    for (const d of before.documents) assert.equal(sha(entries.find((e) => e.name === `files/${d.storage_name}`).data), before.files[d.storage_name]);
+    assert.equal(entries[1].data[18], 1, 'database in rollback mode, so the phone can open it');
+    const last = (await api('GET', '/api/meta')).body.lastBackup;
+    assert.ok(Date.now() - Date.parse(last) < 60_000, 'last backup time recorded');
+  });
+
+  await check('restore after wiping: checked first (nothing changes yet), then every record, tag and file comes back', async () => {
+    for (const c of before.contracts) await api('DELETE', `/api/contracts/${c.id}`);
+    for (const n of before.nocs) await api('DELETE', `/api/nocs/${n.id}`);
+    await api('POST', '/api/contracts', { contract_no: 'AFTER-BACKUP', amount: 1, currency: 'USD' });
+    assert.deepEqual(filesOnDisk(), []);
+    const checked = await restore(backup);
+    assert.equal(checked.status, 200, JSON.stringify(checked.body));
+    assert.deepEqual(checked.body.now, { contracts: 1, nocs: 0, documents: 0 }, 'what would be replaced');
+    assert.deepEqual(checked.body.backup, { contracts: before.contracts.length, nocs: before.nocs.length, documents: before.documents.length });
+    assert.equal((await api('GET', '/api/contracts')).body.items[0].contract_no, 'AFTER-BACKUP', 'nothing replaced before the yes');
+    assert.deepEqual(filesOnDisk(), []);
+    const applied = await api('POST', '/api/restore/apply');
+    assert.equal(applied.status, 200);
+    assert.deepEqual(await everything(), before);
+    assert.equal((await api('GET', '/api/documents?q=REF-BK')).body.total, 1, 'search index restored');
+    assert.equal((await api('GET', '/api/documents?tag=kept')).body.total, 2);
+    assert.equal((await api('GET', '/api/meta')).body.lastBackup, JSON.parse((await tarEntries(backup))[0].data).made);
+    assert.equal((await api('POST', '/api/restore/apply')).status, 409, 'a restore applies once');
+    assert.ok(noStaging());
+  });
+
+  await check('a damaged backup is rejected and nothing changes', async () => {
+    const entries = await tarEntries(backup);
+    const flip = (at) => {
+      const b = Buffer.from(backup);
+      b[at] ^= 0xff;
+      return b;
+    };
+    // A backup put together by hand: the manifest lists `list`; the archive holds `tar` (normally the same).
+    const made = (list, { tar = list, format = 1 } = {}) => {
+      const files = Object.fromEntries(list.map(([n, b]) => [n, { size: b.length, sha256: sha(b) }]));
+      const m = Buffer.from(JSON.stringify({ app: 'Contract Desk', format, from: 'desktop', made: new Date().toISOString(), counts: {}, files }));
+      return Buffer.concat([...[['manifest.json', m], ...tar].flatMap(([n, b]) => [tarHeader(n, b.length), b, tarPad(b.length)]), tarEnd()]);
+    };
+    const all = entries.slice(1).map((e) => [e.name, e.data]);
+    const variants = {
+      'cut off': backup.subarray(0, backup.length - 1500),
+      'a changed byte in a file': flip(backup.indexOf(entries.at(-1).data) + 3),
+      'a changed byte in the database': flip(backup.indexOf(entries[1].data) + 5000),
+      'a changed byte in a file header': flip(100),
+      'a changed byte in the manifest': flip(600),
+      'a database that is not healthy': made([['contracts.db', Buffer.alloc(8192, 7)]]),
+      'a path outside the data folder': made([['contracts.db', entries[1].data], ['../escape.pdf', PDF]]),
+      'a listed file missing from the archive': made(all, { tar: all.slice(0, -1) }),
+      'the same file twice': made(all, { tar: [...all, all.at(-1)] }),
+      'format 0': made(all, { format: 0 }),
+      'format "1" (not a number)': made(all, { format: '1' }),
+      'format 1.5': made(all, { format: 1.5 }),
+      'not a backup': PDF,
+    };
+    // A file in use that differs from the backup's copy of it must stay exactly as it is.
+    const x = path.join(dataDir, before.documents[0].file_path);
+    fs.writeFileSync(x, 'this computer’s own, different bytes');
+    const state = await everything();
+    for (const [what, bytes] of Object.entries(variants)) {
+      const r = await restore(bytes);
+      assert.equal(r.status, 400, what);
+      assert.match(r.body.error, /^This backup file is damaged or is not a Contract Desk backup \(.+\)\. Nothing was changed\.$/, what);
+      assert.deepEqual(await everything(), state, what);
+      assert.ok(noStaging() && !fs.existsSync(path.join(dataDir, 'escape.pdf')), what);
+    }
+    const newer = made([['contracts.db', entries[1].data]]).toString('latin1').replace('"format":1', '"format":9');
+    assert.match((await restore(Buffer.from(newer, 'latin1'))).body.error, /newer version of Contract Desk/);
+    // Checked but not confirmed: still untouched; after the yes, the backup's copy replaces it.
+    assert.equal((await restore(backup)).status, 200);
+    assert.equal(sha(fs.readFileSync(x)), state.files[before.documents[0].storage_name]);
+    assert.equal((await api('POST', '/api/restore/apply')).status, 200);
+    assert.deepEqual(await everything(), before);
+  });
+
+  await check('start-up after a crash during a restore switch: only the set-aside database → it goes back; both → the set-aside one goes', async () => {
+    const [m, d] = await tarEntries(backup);
+    const counts = JSON.parse(m.data).counts;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contract-desk-aside-'));
+    const aside = path.join(dir, 'contracts.db.before-restore');
+    let s5;
+    const start = async () => {
+      s5 = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, DATA_DIR: dir, PORT: '4796', LAN_PASSCODE: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
+      await new Promise((resolve) => s5.stdout.on('data', (b) => String(b).includes('running at') && resolve()));
+      return (await (await fetch('http://127.0.0.1:4796/api/facets')).json()).counts;
+    };
+    const stop = () => new Promise((resolve) => (s5.on('exit', resolve), s5.kill()));
+    try {
+      fs.writeFileSync(aside, d.data); // crashed after moving the current database aside, before the restored one arrived
+      assert.deepEqual(await start(), counts, 'the set-aside database is back in place');
+      assert.ok(!fs.existsSync(aside));
+      await stop();
+      fs.writeFileSync(aside, 'the replaced database'); // crashed after the restored one arrived
+      assert.deepEqual(await start(), counts, 'the restored database is kept');
+      assert.ok(!fs.existsSync(aside));
+    } finally {
+      await stop();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await check('a restore whose switch fails puts the current database back: the server keeps serving the current records', async () => {
+    const aside = path.join(dataDir, 'contracts.db.before-restore');
+    const state = await everything();
+    // 1. Moving the current database aside fails (something already in the way).
+    fs.mkdirSync(path.join(aside, 'in-the-way'), { recursive: true });
+    assert.equal((await restore(backup)).status, 200);
+    let r = await api('POST', '/api/restore/apply');
+    assert.equal(r.status, 500);
+    assert.match(r.body.error, /could not be put in place .* Your current records are still here\./);
+    assert.deepEqual(await everything(), state);
+    assert.equal((await api('POST', '/api/contracts', { contract_no: 'STILL-WORKS', amount: 1, currency: 'USD' })).status, 201, 'the database is open, not closed');
+    fs.rmSync(aside, { recursive: true });
+    // 2. The restored database can't be opened after the switch (it is a folder): the current one goes back.
+    const withNew = await everything();
+    assert.equal((await restore(backup)).status, 200);
+    const [dir] = fs.readdirSync(staging);
+    fs.rmSync(path.join(staging, dir, 'contracts.db'));
+    fs.mkdirSync(path.join(staging, dir, 'contracts.db', 'not-a-database'), { recursive: true });
+    r = await api('POST', '/api/restore/apply');
+    assert.equal(r.status, 500);
+    assert.deepEqual(await everything(), withNew);
+    assert.ok(!fs.existsSync(aside) && fs.statSync(path.join(dataDir, 'contracts.db')).isFile() && noStaging());
+    await api('DELETE', `/api/contracts/${withNew.contracts.find((c) => c.contract_no === 'STILL-WORKS').id}`);
+    assert.deepEqual(await everything(), state);
+  });
+
+  await check('a Windows desktop backup (paths stored as files\\name) restores here with / paths and working files', async () => {
+    const entries = await tarEntries(backup);
+    const tmpDb = path.join(os.tmpdir(), `contract-desk-win-${process.pid}.db`);
+    fs.writeFileSync(tmpDb, entries[1].data);
+    const w = new DatabaseSync(tmpDb);
+    w.exec(`UPDATE documents SET file_path = replace(file_path, '/', char(92))`);
+    w.close();
+    const winDb = fs.readFileSync(tmpDb);
+    fs.rmSync(tmpDb);
+    assert.ok(winDb.includes('files\\'));
+    const files = Object.fromEntries([['contracts.db', winDb], ...entries.slice(2).map((e) => [e.name, e.data])].map(([n, b]) => [n, { size: b.length, sha256: sha(b) }]));
+    const m = Buffer.from(JSON.stringify({ app: 'Contract Desk', format: 1, from: 'desktop', made: new Date().toISOString(), counts: {}, files }));
+    const list = [['manifest.json', m], ['contracts.db', winDb], ...entries.slice(2).map((e) => [e.name, e.data])];
+    assert.equal((await restore(Buffer.concat([...list.flatMap(([n, b]) => [tarHeader(n, b.length), b, tarPad(b.length)]), tarEnd()]))).status, 200);
+    assert.equal((await api('POST', '/api/restore/apply')).status, 200);
+    for (const d of (await api('GET', '/api/documents?page_size=100')).body.items) {
+      assert.equal(d.file_path, `files/${d.storage_name}`);
+      assert.equal((await fetch(`${BASE}/api/documents/${d.id}/file`)).status, 200, d.file_path);
+    }
+    assert.deepEqual(await everything(), before);
+  });
+
+  if (process.env.DB_ENGINE !== 'wasm') {
+    await check('backup and restore of 3,000 contracts with 10,000 files (four of 64 MB) stream through: memory stays flat', async () => {
+      const big = fs.mkdtempSync(path.join(os.tmpdir(), 'contract-desk-big-'));
+      const s4 = spawn(process.execPath, ['server/index.js'], { env: { ...process.env, DATA_DIR: big, PORT: '4798', LAN_PASSCODE: '' }, stdio: ['ignore', 'pipe', 'inherit'] });
+      try {
+        await new Promise((resolve) => s4.stdout.on('data', (b) => String(b).includes('running at') && resolve()));
+        const d = new DatabaseSync(path.join(big, 'contracts.db'));
+        d.exec('BEGIN');
+        const c = d.prepare(`INSERT INTO contracts (id, contract_no, amount, currency) VALUES (?, ?, 1, 'USD')`);
+        for (let i = 1; i <= 3000; i++) c.run(i, `BIG-${i}`);
+        const doc = d.prepare(`INSERT INTO documents (contract_id, display_name, original_name, storage_name, file_path, mime_type, file_type, size_bytes, category)
+          VALUES (?, ?, ?, ?, ?, 'application/pdf', 'pdf', ?, 'Other Documents')`);
+        for (let k = 1; k <= 10_000; k++) {
+          const name = `${randomUUID()}.pdf`;
+          const bytes = k <= 4 ? randomBytes(64 * 1024 * 1024) : randomBytes(20_000);
+          fs.writeFileSync(path.join(big, 'files', name), bytes);
+          doc.run((k % 3000) + 1, `Doc ${k}`, `doc-${k}.pdf`, name, `files/${name}`, bytes.length);
+        }
+        d.exec('COMMIT');
+        d.close();
+        const peak = () => Number(fs.readFileSync(`/proc/${s4.pid}/status`, 'utf8').match(/VmHWM:\s+(\d+)/)[1]) * 1024;
+        const file = path.join(big, 'backup.tar');
+        const res = await fetch('http://127.0.0.1:4798/api/backup');
+        await pipeline(res.body, fs.createWriteStream(file));
+        const size = fs.statSync(file).size;
+        assert.ok(size > 450 * 2 ** 20, `${size} bytes`);
+        const r = await fetch('http://127.0.0.1:4798/api/restore', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: fs.createReadStream(file), duplex: 'half' });
+        assert.deepEqual((await r.json()).backup, { contracts: 3000, nocs: 0, documents: 10_000 });
+        assert.equal((await fetch('http://127.0.0.1:4798/api/restore/apply', { method: 'POST' })).status, 200);
+        const mb = (n) => `${(n / 2 ** 20).toFixed(0)} MB`;
+        console.log(`      ${mb(size)} backup made and restored; server memory peak ${mb(peak())}`);
+        assert.ok(peak() < 256 * 2 ** 20, `server memory peaked at ${mb(peak())}`); // ~190 MB, the same for a 700 MB backup
+      } finally {
+        s4.kill();
+        fs.rmSync(big, { recursive: true, force: true });
+      }
+    });
+  }
+
   // Wi-Fi access: a second server with a passcode, reached through this machine's network address like a phone would.
   const lanIp = Object.values(os.networkInterfaces()).flat().find((n) => n.family === 'IPv4' && !n.internal)?.address;
   await check('Wi-Fi access: refuses a short passcode', async () => {
@@ -395,6 +638,17 @@ try {
     try {
       await new Promise((resolve) => lan.stdout.on('data', (b) => String(b).includes('Wi-Fi access ON') && resolve()));
       const L = `http://${lanIp}:4792`;
+      await check('Wi-Fi access: a phone with the passcode may download a backup but not restore one', async () => {
+        const login = await fetch(`${L}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"passcode":"harbor-2026"}' });
+        const Cookie = login.headers.get('set-cookie').split(';')[0];
+        assert.equal((await fetch(`${L}/api/backup`, { headers: { Cookie } })).status, 200);
+        const lanBackup = Buffer.from(await (await fetch('http://127.0.0.1:4792/api/backup')).arrayBuffer());
+        const r = await fetch(`${L}/api/restore`, { method: 'POST', headers: { Cookie, 'Content-Type': 'application/octet-stream' }, body: lanBackup });
+        assert.equal(r.status, 403);
+        assert.match((await r.json()).error, /on the computer/);
+        assert.equal((await fetch(`${L}/api/restore/apply`, { method: 'POST', headers: { Cookie } })).status, 403);
+        assert.equal((await fetch(`${L}/api/meta`, { headers: { Cookie } }).then((x) => x.json())).onThisComputer, false, 'the screens hide Restore there');
+      });
       await check('Wi-Fi access: phones need the passcode; this computer does not', async () => {
         assert.equal((await fetch(`${L}/api/contracts`)).status, 401);
         assert.equal((await fetch(`${L}/api/documents/1/file`)).status, 401, 'files are protected too');

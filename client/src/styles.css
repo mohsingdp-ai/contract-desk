@@ -411,7 +411,11 @@ mark {
   gap: 6px;
   margin: 2px 0 4px;
 }
-.rail-folder button {
+.rail-folder button,
+.rail-folder a {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
   min-height: 30px;
   padding: 0 10px;
   border: 1px solid #ffffff33;
@@ -420,8 +424,20 @@ mark {
   font-size: 12px;
   cursor: pointer;
 }
+.rail-folder a:hover,
 .rail-folder button:hover {
   border-color: var(--rail-ink);
+}
+.backup-reminder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0 0 18px;
+  padding: 10px 14px;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--signal);
+  font-size: 13.5px;
 }
 .phone-folder {
   display: flex;

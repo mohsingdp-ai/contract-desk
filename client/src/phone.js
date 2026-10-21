@@ -5,6 +5,8 @@
 // Native calls go to the small Folder plugin (android/.../FolderPlugin.java). A folder is { path } (All files access: plain
 // file I/O) or { path, tree } (permission refused: everything through the system picker's content:// link).
 import { storedName, downloadName, UPLOAD_LIMITS } from '../../core/rules.js';
+import { backupFileName, backupManifest, damaged, readBackup, sha256Hasher, tarEnd, tarHeader, tarPad } from '../../core/backup.js';
+import { version } from '../../package.json';
 
 const cap = typeof window !== 'undefined' ? window.Capacitor : undefined;
 export const isPhone = !!cap?.isNativePlatform?.();
@@ -75,8 +77,8 @@ const stat = (f, name) => native('stat', { folder: where(f), name });
 // Which file this is: size + SHA-256 of its bytes. Not the modified time: on the S24+ (Android 16) the time reported
 // for contracts.db after a rename was sometimes the old file's, which made the app re-open the folder copy and drop
 // changes it had not saved yet.
-const fileKey = async (bytes) =>
-  `${bytes.length}|${[...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
+const fileKey = async (bytes) => `${bytes.length}|${await sha256(bytes)}`;
 const base64 = (bytes) =>
   new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -85,9 +87,9 @@ const base64 = (bytes) =>
     r.readAsDataURL(new Blob([bytes]));
   });
 
-async function writePieces(f, name, bytes) {
+async function writePieces(f, name, bytes, append = false) {
   for (let at = 0; at === 0 || at < bytes.length; at += PIECE) {
-    await native('write', { folder: where(f), name, data: await base64(bytes.subarray(at, at + PIECE)), append: at > 0 });
+    await native('write', { folder: where(f), name, data: await base64(bytes.subarray(at, at + PIECE)), append: append || at > 0 });
   }
 }
 
@@ -234,6 +236,7 @@ async function attach(f) {
     if (phoneState.gen > ours.gen) await save(); // changes the folder copy does not have yet (killed before or during a save)
   }
   await syncPointer();
+  await native('remove', { folder: where(f), name: '.restore' }); // left by a restore that was never confirmed or finished
   const { names } = await native('list', { folder: where(f), dir: 'files' });
   await call('sweep', { names });
   setStatus('ready');
@@ -346,4 +349,144 @@ export async function exportExcel(query, how) {
   await writePieces(cache, `export/${name}`, bytes);
   if (how === 'open') return openWith(fileUri(cache, `export/${name}`), XLSX, name);
   await native('share', { folder: cache.path, name: `export/${name}`, as: name, mime: XLSX });
+}
+
+// ---------- backup and restore (one format with the desktop: core/backup.js) ----------
+
+const BATCH = 200; // documents per native call: few bridge round trips, still regular progress
+const TAR = 'application/x-tar';
+const join = async (...parts) => new Uint8Array(await new Blob(parts).arrayBuffer());
+// Size and SHA-256 of files in a folder, worked out by the phone itself (the bytes never cross the bridge).
+async function hashFiles(f, names) {
+  const out = [];
+  for (let i = 0; i < names.length; i += BATCH) out.push(...(await native('hashFiles', { folder: where(f), names: names.slice(i, i + BATCH) })).files);
+  return out;
+}
+
+// Built in the app's cache: small parts (headers, the database) go over the bridge in 4 MB pieces, and each document is
+// copied by the phone itself. Then it is saved to Downloads (outside the app, so it survives uninstall) and handed to
+// the share menu (Drive, email, a computer…) so it can leave the phone. Returns the name it got in Downloads.
+export async function backup(onProgress = () => {}) {
+  await ready;
+  const f = folder;
+  const { bytes: dbBytes, docs, counts } = await call('backupData');
+  const files = { 'contracts.db': { size: dbBytes.length, sha256: await sha256(dbBytes) } };
+  const paths = docs.map((d) => d.file_path.replaceAll('\\', '/'));
+  const items = []; // [name in the backup, path in the folder, size]
+  (await hashFiles(f, paths)).forEach((h, i) => {
+    if (!h.exists) return; // a document whose file is already missing is left out rather than stopping the backup
+    const name = `files/${docs[i].storage_name}`;
+    files[name] = { size: h.size, sha256: h.sha256 };
+    items.push([name, paths[i], h.size]);
+  });
+  const manifest = new TextEncoder().encode(backupManifest({ appVersion: version, from: 'phone', counts, files }));
+  const out = { path: (await native('cacheFolder')).path };
+  const name = backupFileName();
+  await writePieces(out, name, await join(tarHeader('manifest.json', manifest.length), manifest, tarPad(manifest.length), tarHeader('contracts.db', dbBytes.length)));
+  await writePieces(out, name, dbBytes, true);
+  let tail = tarPad(dbBytes.length); // the entry before's padding, sent with the next header
+  for (let i = 0; i < items.length; i += BATCH) {
+    const batch = items.slice(i, i + BATCH);
+    const parts = [];
+    for (const [entry, rel, size] of batch) {
+      parts.push({ data: await base64(await join(tail, tarHeader(entry, size))) }, { folder: where(f), name: rel });
+      tail = tarPad(size);
+    }
+    const { sizes } = await native('append', { to: out.path, name, parts });
+    const changed = batch.find(([, , size], j) => sizes[2 * j + 1] !== size);
+    if (changed) throw new Error(`${changed[0]} changed while it was being backed up. Try again.`);
+    onProgress(Math.min(1, (i + BATCH) / items.length));
+  }
+  await writePieces(out, name, await join(tail, tarEnd()), true);
+  const saved = await native('saveToDownloads', { folder: out.path, name, as: name, mime: TAR });
+  await call('noteBackup', { at: new Date().toISOString() });
+  await native('share', { folder: out.path, name, as: name, mime: TAR, move: true });
+  return saved.name;
+}
+
+const STAGING = '.restore'; // in the data folder: a restore's files wait here until the owner says yes
+let staged = null; // a checked backup waiting for the owner's yes: { bytes, manifest, moves }
+const dropStaging = (f) => native('remove', { folder: where(f), name: STAGING }).catch((err) => console.error('Could not remove', STAGING, err));
+
+// Restore, step 1: reads the chosen file in 4 MB pieces and checks all of it (every entry's size and SHA-256, the
+// database's integrity). Nothing in use is touched: document files go to .restore/ (except those already here with the
+// same bytes), the database stays in memory. If the check fails or is cancelled (signal: the dialog was closed), only
+// .restore/ is removed. One check at a time: a new one waits for a cancelled one to clear up. Answers what would be replaced.
+let checking = Promise.resolve();
+export function checkRestore(file, signal) {
+  const run = () => check(file, signal);
+  return (checking = checking.catch(() => {}).then(run));
+}
+async function check(file, signal) {
+  await ready;
+  await cancelRestore();
+  const f = folder;
+  const moves = []; // [in .restore/, in files/]
+  let here; // names in files/ that already hold exactly the backup's bytes
+  let dbBytes;
+  async function* pieces() {
+    for (let at = 0; at < file.size; at += PIECE) {
+      if (signal?.aborted) throw new Error('Restore cancelled');
+      yield new Uint8Array(await file.slice(at, at + PIECE).arrayBuffer());
+    }
+  }
+  try {
+    const manifest = await readBackup(pieces(), async (name, size, sha, manifest) => {
+      const hash = sha256Hasher();
+      const parts = []; // the database is kept in memory, to import
+      let write = null; // where a document's pieces go, unless the same file is already here
+      if (name !== 'contracts.db') {
+        if (!here) {
+          const names = Object.keys(manifest.files).filter((n) => n !== 'contracts.db');
+          const h = await hashFiles(f, names);
+          here = new Set(names.filter((n, i) => h[i].exists && h[i].sha256 === manifest.files[n].sha256));
+        }
+        if (!here.has(name)) {
+          const to = `${STAGING}/${name.slice('files/'.length)}`;
+          moves.push([to, name]);
+          let first = true;
+          write = async (piece) => (await native('write', { folder: where(f), name: to, data: await base64(piece), append: !first }), (first = false));
+          if (!size) await write(new Uint8Array(0));
+        }
+      }
+      return async (piece) => {
+        if (piece) {
+          hash.update(piece);
+          return write ? write(piece) : name === 'contracts.db' && parts.push(piece.slice());
+        }
+        if (hash.hex() !== sha) throw damaged(`${name} does not match`);
+        if (name === 'contracts.db') dbBytes = await join(...parts);
+      };
+    });
+    const { now, backup } = await call('checkBackup', { bytes: dbBytes });
+    if (!backup) throw damaged('its database is damaged');
+    staged = { bytes: dbBytes, manifest, moves };
+    return { made: manifest.made, from: manifest.from, now, backup };
+  } catch (err) {
+    await dropStaging(f);
+    throw err;
+  }
+}
+
+// Step 2, after the owner said yes. The files move into files/ first: their names are unique per document, so the
+// current records keep working (a file of the same name that differs is the same document, damaged: the backup's copy
+// replaces it). Then the phone database is replaced and saved to the data folder the usual way (.tmp + rename): if the
+// app dies before that, the next start opens the folder's current records, and the extra files are tidied away.
+export async function applyRestore() {
+  const { bytes, manifest, moves } = staged;
+  staged = null;
+  for (const [from, to] of moves) await native('rename', { folder: where(folder), from, to });
+  // One step (see 'restore' in phone-worker.js): the restored database lands marked as the phone's own unsaved change to
+  // the current folder file, with the backup's time as the last backup. If the app dies before the save below finishes,
+  // the next start saves the phone's (restored) copy to the folder, rather than opening the folder's old one again.
+  phoneState = await call('restore', { bytes, saved: { folder, key: phoneState.saved?.key }, at: manifest.made });
+  await save();
+  await dropStaging(folder);
+  const { names } = await native('list', { folder: where(folder), dir: 'files' });
+  await call('sweep', { names }); // files only the replaced records had
+}
+
+export async function cancelRestore() {
+  if (staged) await dropStaging(folder);
+  staged = null;
 }
