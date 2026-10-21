@@ -4,7 +4,7 @@ title: 'Phone polish: back button, fingerprint lock, icon, storage warning'
 status: Review
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 10:25'
+updated_date: '2026-10-21 11:44'
 labels:
   - android
 milestone: m-0
@@ -25,10 +25,20 @@ Make it feel like a proper Android app.
 <!-- AC:BEGIN -->
 - [x] #1 Android back button moves back through screens and closes dialogs
 - [x] #2 Optional fingerprint/face lock on opening the app
-- [ ] #3 App icon and launch screen
+- [x] #3 App icon and launch screen
 - [x] #4 Shows storage used and warns when the phone is nearly full
 - [ ] #5 Back button and lock checked by hand on a real phone (automated later in TASK-7)
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Real-phone check (S24+, 2026-10-21):
+- Icon: orange square on dark tile in the app drawer, label 'Contract Desk'. Launch: dark screen with the orange square, then 'Opening the desk…', then Search. A ~0.1 s plain black frame shows between splash and the first page (cosmetic).
+- Back button: dialog (keyboard closes first, then dialog), document drawer, contract -> Contracts -> Search, and exit only from Search: all as designed.
+- Lock: fingerprint enrolled. Turning the switch on asks for fingerprint first (prompt 'Contract Desk / Unlock your records / Use PIN'); cancelling leaves it off. With the switch on: prompt on cold start; cancel -> 'Contract Desk is locked' screen with Unlock (retries); back on the lock screen exits; 'Use PIN' opens the phone PIN entry; prompt again after 3+ min in the background. Not done: an actual fingerprint/PIN success (can't via adb; owner's PIN). AC #5 left for the owner's final fingerprint tap.
+- test/phone.mjs lock check (line ~372) is flaky: 1 failure in 4 runs ('Unlock' button detached while clicking: the auto-unlock races with bioFail=false).
+<!-- SECTION:NOTES:END -->
 
 ## Final Summary
 

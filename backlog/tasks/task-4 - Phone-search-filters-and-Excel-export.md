@@ -4,7 +4,7 @@ title: 'Phone search, filters and Excel export'
 status: Review
 assignee: []
 created_date: '2026-10-21 07:07'
-updated_date: '2026-10-21 10:12'
+updated_date: '2026-10-21 11:44'
 labels:
   - android
 milestone: m-0
@@ -50,6 +50,19 @@ All under 0.5 s; the test fails above 0.5 s. Numbers vary a few ms per run.
 Excel export on the phone: the worker gives the export data (same shared rule as desktop), the screen builds the workbook with ExcelJS (loaded only when exporting, ~940 kB chunk), writes it in 4 MB pieces to the app cache folder, then the Folder plugin opens Android's share menu (new native methods cacheFolder and share, FileProvider link). Not tried on the real phone yet.
 
 Pending phone check: AC #4 (opens in a spreadsheet app from the share menu) and AC #5 (real low-end phone timing).
+
+Real-phone check (S24+, Android 16, 2026-10-21): data folder with 3,000 contracts, 300 NOCs, 10,000 documents, 20,000 tag links (seedBig from test/phone.mjs), opened via Change folder. Search, typed into the search box, timed from input to all three result counts on screen (includes the 120 ms typing pause), 3 runs each; database time measured inside the worker (3 lists):
+| Search | Results (C/N/D) | On screen | Database |
+| --- | --- | --- | --- |
+| CT-30 | 12/0/0 | 155, 167, 168 ms | 6.0-6.6 ms |
+| INV-2026-31 | 0/0/56 | 179, 169, 160 ms | 7.6-8.8 ms |
+| harbor | 1000/50/0 | 176, 162, 170 ms | 7.5-8.9 ms |
+| ab | 1200/0/0 | 187, 176, 176 ms | 20.3-22.4 ms |
+| urgent | 0/0/4000 | 162, 194, 180 ms | 17.5-29.3 ms |
+| Packing list 42 | 0/0/22 | 175, 183, 163 ms | 9.3-13.4 ms |
+| CT-2999 | 1/0/0 | 164, 153, 159 ms | 7.8-9.7 ms |
+Counts match the desktop rules on the same file. AC #5 left open: needs a low-end phone.
+Excel export on the phone: 'all' (1-contract DB and 3,000 DB) and 'filtered' (q=harbor) both open the share sheet with contract-desk-export-<date>.xlsx; 3,000-record export reached the share sheet in 1.3 s. Pulled from the app cache and read with exceljs: Contracts 3000 / NOCs 300 / Documents 10000 rows (all), 1000 / 50 / 3283 (harbor) = desktop exportData exactly. Not shown: opening in a spreadsheet app (none installed; Microsoft 365 routes to Copilot upload, not used). AC #4 stays open for the owner. Note: a search that only matches documents exports empty sheets (same shared rule as desktop: documents of matching contracts/NOCs).
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
