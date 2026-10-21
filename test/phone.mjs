@@ -26,7 +26,8 @@ await build({ configFile: path.resolve('vite.config.js'), logLevel: 'error', bui
 // ---------- the "phone" ----------
 
 // die: 'before' / 'after' makes the next contracts.db replace hang before / after it happens, so the test can "kill" the app there.
-const device = { access: false, grantOnRequest: true, pick: null, calls: [], die: null, hung: false };
+// bio: what the fingerprint / face check reports; bioFail: the next fingerprint doesn't match (or is cancelled).
+const device = { access: false, grantOnRequest: true, pick: null, calls: [], die: null, hung: false, free: 8 * 1024 ** 3, bio: { isAvailable: true, deviceIsSecure: true }, bioFail: false, exited: false };
 const hang = () => ((device.hung = true), new Promise(() => {}));
 // Folder (path or picker link) + name -> file on disk.
 function disk(folder, name = '') {
@@ -55,6 +56,13 @@ const plugin = {
   remove: ({ folder, name }) => fs.rmSync(disk(folder, name), { force: true }),
   list: ({ folder, dir }) => ({ names: fs.existsSync(disk(folder, dir)) ? fs.readdirSync(disk(folder, dir)) : [] }),
   copy: ({ from, to, name }) => (fs.copyFileSync(disk(from, name), disk(to, name)), { bytes: fs.statSync(disk(to, name)).size }),
+  freeSpace: () => ({ free: device.free }),
+  // BiometricAuthNative (@aparajita/capacitor-biometric-auth) and App (@capacitor/app)
+  checkBiometry: () => device.bio,
+  internalAuthenticate: () => {
+    if (device.bioFail) throw new Error('Authentication failed');
+  },
+  exitApp: () => void (device.exited = true),
 };
 
 // Serves the bundle, plus phone files at the URL the fake convertFileSrc gives (the WebView's file server on Android).
@@ -85,6 +93,7 @@ async function launch(profile, { oldWebView = false } = {}) {
       isNativePlatform: () => true,
       convertFileSrc: (u) => `/__folder__/${encodeURIComponent(u)}`,
       nativePromise: (name, method, opts) => window.__native(method, opts),
+      nativeCallback: (name, method, opts, callback) => (window.__backButton = callback), // App.addListener('backButton')
     };
   });
   if (oldWebView) {
@@ -129,6 +138,20 @@ const check = async (name, fn) => {
   passed++;
   console.log(`  ✓ ${name}`);
 };
+
+// The Android back button; canGoBack is what the WebView reports.
+const back = (page, canGoBack = true) => page.evaluate((c) => window.__backButton({ canGoBack: c }), canGoBack);
+// The app goes to the background for `ms` and comes back.
+const away = (page, ms) =>
+  page.evaluate((ms) => {
+    const now = Date.now;
+    const hidden = (h) => (Object.defineProperty(document, 'hidden', { configurable: true, get: () => h }), document.dispatchEvent(new Event('visibilitychange')));
+    hidden(true);
+    Date.now = () => now() + ms;
+    hidden(false);
+    Date.now = now;
+  }, ms);
+const lockBox = (page) => page.getByLabel('Lock with fingerprint or face');
 
 async function addContract(page, no) {
   await page.goto(`${BASE}#/contracts?new=1`);
@@ -184,6 +207,96 @@ try {
     await page.getByText('CT-001').first().waitFor();
     assert.equal(fs.statSync(path.join(DEFAULT_DIR, 'contracts.db')).mtimeMs, before);
     assert.ok(!device.calls.includes('write'));
+  });
+
+  await check('storage: shows what the data folder uses and the free space; warns when the phone is nearly full', async () => {
+    const { page } = app;
+    await page.goto(BASE);
+    const kb = (fs.statSync(path.join(DEFAULT_DIR, 'contracts.db')).size / 1024).toFixed(0); // no documents yet
+    await page.getByText(`Uses ${kb} KB · 8.0 GB free on the phone`).waitFor();
+    assert.equal(await page.getByText('The phone is nearly full').count(), 0);
+    device.free = 300 * 1024 ** 2;
+    await page.reload();
+    await page.getByText('The phone is nearly full: only 300.0 MB free. Free up space before adding documents').waitFor();
+    device.free = 8 * 1024 ** 3;
+  });
+
+  await check('Android back button: closes a dialog first, then goes back through screens; only Search exits the app', async () => {
+    const { page } = app;
+    await page.goto(BASE);
+    await page.goto(`${BASE}#/contracts`);
+    await page.getByRole('button', { name: 'New contract' }).click();
+    await page.locator('.modal').waitFor();
+    await back(page);
+    await page.locator('.modal').waitFor({ state: 'detached' });
+    assert.ok(page.url().endsWith('#/contracts'));
+    await back(page);
+    await page.locator('#q').waitFor();
+    assert.ok(!device.exited);
+    await page.goto(`${BASE}#/nocs`);
+    await back(page, false); // nothing to go back to (e.g. right after start): Search
+    await page.locator('#q').waitFor();
+    assert.ok(!device.exited);
+    await back(page);
+    await until(() => device.exited, 'the app exits from Search');
+    device.exited = false;
+  });
+
+  await check('fingerprint lock: off by default; turning it on asks for a fingerprint first', async () => {
+    const { page } = app;
+    await page.goto(BASE);
+    assert.equal(await lockBox(page).isChecked(), false);
+    device.bioFail = true; // a failed check leaves it off
+    device.calls = [];
+    await lockBox(page).click();
+    await until(() => device.calls.includes('internalAuthenticate'), 'the fingerprint check');
+    assert.equal(await lockBox(page).isChecked(), false);
+    device.bioFail = false;
+    await lockBox(page).click();
+    await page.locator('.phone-lock input:checked').waitFor();
+  });
+
+  await check('fingerprint lock: asks on opening and after a while in the background; back exits; a half-filled form survives it', async () => {
+    await quit();
+    device.bioFail = true;
+    const page = await launch('install-1');
+    const lock = page.locator('.lock-screen');
+    await page.getByRole('heading', { name: 'Contract Desk is locked' }).waitFor();
+    await page.locator('#q').waitFor({ state: 'attached' }); // the desk opens underneath…
+    assert.ok(await page.evaluate(() => !!document.elementFromPoint(200, 300).closest('.lock-screen')), '…but stays covered');
+    await back(page);
+    await until(() => device.exited, 'back on the lock screen exits');
+    device.exited = false;
+    device.bioFail = false;
+    await page.getByRole('button', { name: 'Unlock' }).click();
+    await lock.waitFor({ state: 'detached' });
+    await page.goto(`${BASE}#/contracts?new=1`);
+    await page.locator('.modal').getByLabel('Contract No.').fill('CT-HALF');
+    await away(page, 10_000); // a short switch to another app: still open
+    assert.equal(await lock.count(), 0);
+    device.bioFail = true;
+    await away(page, 4 * 60_000);
+    await page.getByRole('heading', { name: 'Contract Desk is locked' }).waitFor();
+    device.bioFail = false;
+    await page.getByRole('button', { name: 'Unlock' }).click();
+    await lock.waitFor({ state: 'detached' });
+    assert.equal(await page.locator('.modal').getByLabel('Contract No.').inputValue(), 'CT-HALF');
+    await back(page); // close the form unsaved
+    await page.locator('.modal').waitFor({ state: 'detached' });
+  });
+
+  await check('fingerprint lock never locks the owner out: with no fingerprint, face or PIN left, the app opens; the switch explains why', async () => {
+    await quit();
+    device.bio = { isAvailable: false, deviceIsSecure: false };
+    device.bioFail = true;
+    const page = await launch('install-1'); // lock still on
+    await page.locator('#q').waitFor();
+    await page.getByText('Set a screen lock (PIN, pattern, fingerprint or face)').waitFor();
+    await lockBox(page).click(); // can always be turned off
+    assert.equal(await lockBox(page).isChecked(), false);
+    assert.ok(await lockBox(page).isDisabled(), 'and can\'t be turned on without a screen lock');
+    device.bio = { isAvailable: true, deviceIsSecure: true };
+    device.bioFail = false;
   });
 
   await check('killed before the autosave: the next start saves the unsaved change to the folder', async () => {
@@ -253,6 +366,20 @@ try {
     await page.goto(`${BASE}#/contracts/${deskC.id}`);
     await page.getByRole('heading', { name: 'DESK-9' }).waitFor();
     await page.getByText('invoice', { exact: true }).waitFor();
+  });
+
+  await check('Android back button closes the open document first; the next press leaves the record without re-opening it', async () => {
+    const { page } = app;
+    await page.getByRole('button', { name: 'scan', exact: true }).click();
+    const drawer = page.getByRole('complementary', { name: 'Document' });
+    await drawer.waitFor();
+    await back(page);
+    await drawer.waitFor({ state: 'detached' });
+    await page.getByRole('heading', { name: 'DESK-9' }).waitFor();
+    await back(page);
+    await page.locator('#q').waitFor(); // where the record was opened from
+    assert.equal(await drawer.count(), 0);
+    await page.goto(`${BASE}#/contracts/${deskC.id}`);
   });
 
   await check('documents: rename, category, Reference No. and tags (Urgent = " urgent "); the image shows from the folder', async () => {

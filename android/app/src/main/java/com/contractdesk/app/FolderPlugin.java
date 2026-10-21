@@ -262,6 +262,17 @@ public class FolderPlugin extends Plugin {
         call.resolve(r);
     }
 
+    // Free bytes on the storage that holds the folder (its plain path, also in picker mode). Without All files access the
+    // path may not be readable (0): the phone's own storage is then used, which is where Documents lives.
+    @PluginMethod
+    public void freeSpace(PluginCall call) {
+        long free = new File(call.getString("path")).getUsableSpace();
+        if (free == 0) free = Environment.getDataDirectory().getUsableSpace();
+        JSObject r = new JSObject();
+        r.put("free", free);
+        call.resolve(r);
+    }
+
     // Copies one file between data folders (moving records to a new folder). Returns the bytes copied.
     @PluginMethod
     public void copy(PluginCall call) {

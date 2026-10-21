@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, qs, fmtAmount, fmtDate, isPhone } from './api.js';
 import * as phone from './phone.js';
-import { Icon, Hl, Modal, Confirm, Field, Pager, DocRow, UploadDialog, DocDrawer, DeleteDocConfirm } from './ui.jsx';
+import * as phoneApp from './phone-app.js';
+import { Icon, Hl, Modal, Confirm, Field, Pager, DocRow, UploadDialog, DocDrawer, DeleteDocConfirm, PhoneSpace } from './ui.jsx';
 
 // ---------- hash routing: #/path?query ----------
 
@@ -56,7 +57,19 @@ const CONTRACT_ONLY = ['project', 'firm', 'currency', 'min', 'max'];
 
 // ---------- app shell ----------
 
+// Phone app with the lock on: the lock covers the desk instead of replacing it, so a half-filled form survives it.
 export default function App() {
+  const [locked, setLocked] = useState(() => isPhone && phoneApp.lockOn());
+  useEffect(() => void (isPhone && phoneApp.watchLock(() => setLocked(true))), []);
+  return (
+    <>
+      <Desk />
+      {locked && <LockScreen onUnlock={() => setLocked(false)} />}
+    </>
+  );
+}
+
+function Desk() {
   const [route, go] = useRoute();
   const [version, setVersion] = useState(0);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
@@ -69,6 +82,7 @@ export default function App() {
     const on = () => setPhoneStatus(phone.status);
     window.addEventListener('phone-status', on);
     phone.start();
+    phoneApp.handleBackButton();
     return () => window.removeEventListener('phone-status', on);
   }, []);
   useEffect(() => {
@@ -163,6 +177,55 @@ function PasscodeScreen() {
         </footer>
       </form>
     </div>
+  );
+}
+
+// Shown at start and after a while in the background, until a fingerprint, face or the phone's PIN matches.
+function LockScreen({ onUnlock }) {
+  const [busy, setBusy] = useState(false);
+  const tryUnlock = async () => {
+    setBusy(true);
+    if (await phoneApp.unlock()) onUnlock();
+    else setBusy(false);
+  };
+  useEffect(() => void tryUnlock(), []);
+  return (
+    <div className="passcode lock-screen">
+      <div className="modal">
+        <header className="modal-head">
+          <h2>Contract Desk is locked</h2>
+        </header>
+        <div className="modal-body">
+          <p>Use your fingerprint, face or the phone’s PIN to open your records.</p>
+        </div>
+        <footer className="modal-foot">
+          <button className="btn btn-primary" disabled={busy} onClick={tryUnlock}>
+            Unlock
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+// Phone app: on/off switch for the lock. Turning it on asks for a fingerprint first, so it is known to work. Can't be
+// turned on when the phone has no fingerprint, face or screen lock (the reason is shown); can always be turned off.
+function LockSetting() {
+  const [on, setOn] = useState(phoneApp.lockOn);
+  const [why, setWhy] = useState(null);
+  useEffect(() => void phoneApp.lockUnavailable().then(setWhy), []);
+  const toggle = async (e) => {
+    const want = e.target.checked;
+    if (want && !(await phoneApp.unlock())) return;
+    phoneApp.setLockOn(want);
+    setOn(want);
+  };
+  return (
+    <label className="phone-lock">
+      <input type="checkbox" checked={on} disabled={why === null || (!on && !!why)} onChange={toggle} />
+      Lock with fingerprint or face
+      {why && <span className="dim">{why}</span>}
+    </label>
   );
 }
 
@@ -679,6 +742,8 @@ function SearchPage({ route, go, meta, facets, version, openDoc, openParent }) {
           <button className="btn btn-sm" onClick={changePhoneFolder}>
             Change folder…
           </button>
+          <PhoneSpace />
+          <LockSetting />
         </footer>
       )}
     </div>
@@ -824,7 +889,7 @@ function ContractsPage({ route, go, meta, facets, version, bump }) {
           onClose={() => go('/contracts', { ...params, new: '' }, { replace: true })}
           onSaved={(c) => {
             bump();
-            go(`/contracts/${c.id}`);
+            go(`/contracts/${c.id}`, {}, { replace: true }); // the filled-in form is not a step to go back to
           }}
         />
       )}
@@ -1237,7 +1302,7 @@ function NocsPage({ route, go, meta, facets, version, bump }) {
           onClose={() => go('/nocs', { ...params, new: '' }, { replace: true })}
           onSaved={(n) => {
             bump();
-            go(`/nocs/${n.id}`);
+            go(`/nocs/${n.id}`, {}, { replace: true });
           }}
         />
       )}
