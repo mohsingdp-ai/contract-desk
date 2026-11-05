@@ -722,11 +722,39 @@ mark {
     margin-bottom: 0;
   }
 }
+/* Even grid sized by the box's own width: 2, 4 or 8 equal columns, so the
+   six selects plus the two-column Amount range always fill whole rows. */
+.filters-wrap {
+  container-type: inline-size;
+}
 .filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 18px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
   margin-bottom: 18px;
+}
+@container (min-width: 540px) {
+  .filters {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@container (min-width: 1080px) {
+  .filters {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+}
+.filters .filter select {
+  width: 100%;
+  max-width: none;
+  text-overflow: ellipsis;
+}
+.filters .filter-range {
+  grid-column: span 2;
+}
+.filters > .btn-link {
+  grid-column: 1 / -1;
+  justify-self: start;
+  margin: 0;
 }
 .search-hero .filters {
   margin-bottom: 0;
@@ -769,10 +797,14 @@ mark {
 .range {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
 }
 .range input {
-  width: 90px;
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  max-width: none;
+  padding: 0 6px; /* text lines up with the selects' values */
   font-family: var(--mono);
   cursor: text;
 }
